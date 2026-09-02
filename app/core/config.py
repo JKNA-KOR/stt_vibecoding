@@ -155,15 +155,26 @@ class Settings(BaseSettings):
     # 분석은 요약·분류·키워드만 만들고 원본은 건드리지 않는다. 그래서 교정은 여전히
     # 범위 밖이고 분석만 구현되어 있다.
     enable_llm_analysis: bool = False
-    llm_provider: Literal["ollama", "mock"] = "ollama"
-    # 로컬에서 도는 LLM 만 기본으로 허용한다. 녹취 본문을 외부로 보내는 것은 SEC-021
-    # 위반이므로, 외부 Provider 는 아래 승인 플래그 없이는 선택 자체가 거부된다.
+
+    # 접속 정보는 전부 설정에서 온다. 새 LLM 을 붙이는 데 코드 변경이 필요 없다 (§5.2).
+    #   ollama            : Ollama 고유 API (/api/chat)
+    #   openai-compatible : OpenAI 형식 /chat/completions 를 말하는 모든 엔드포인트
+    #                       (OpenAI, Groq, vLLM, LM Studio, Ollama 의 /v1 등)
+    #   mock              : 테스트용. prod 선택 시 기동 거부
+    llm_provider: Literal["ollama", "openai-compatible", "mock"] = "ollama"
     llm_base_url: str = "http://127.0.0.1:11434"
     llm_model_name: str = "gemma3:latest"
+    # Bearer 토큰으로 전달된다. 로그·응답·오류 메시지 어디에도 나가지 않는다 (§9 / §15).
+    llm_api_key: SecretStr = SecretStr("")
+    # 응답 형식 강제 방식. 엔드포인트가 무엇을 지원하는지에 따라 고른다.
+    #   json_schema : 스키마를 그대로 강제한다. 지원하면 이쪽이 낫다
+    #   json_object : JSON 이라는 것만 강제한다. 구형 엔드포인트 대비
+    llm_json_mode: Literal["json_schema", "json_object"] = "json_schema"
     llm_timeout_seconds: Annotated[int, Field(ge=10, le=3600)] = 300
     # 프롬프트에 실어 보낼 Transcript 길이 상한. 넘으면 잘라 보내고 그 사실을 기록한다.
     llm_max_transcript_chars: Annotated[int, Field(ge=1000, le=200000)] = 20000
-    # 외부 LLM 전송 승인. 켜려면 개인정보 영향평가와 위탁 계약이 선행되어야 한다 (§8.2).
+    # 외부 LLM 전송 승인. 녹취 본문이 사내 경계를 벗어나므로, 켜기 전에 개인정보
+    # 영향평가와 위탁 계약이 선행되어야 한다 (SEC-021 / §8.2).
     allow_external_llm: bool = False
 
     ffmpeg_binary: str = "/usr/bin/ffmpeg"
@@ -300,6 +311,16 @@ class Settings(BaseSettings):
                 "prod 환경에서 LLM_PROVIDER='mock' 은 허용되지 않는다 (Harness §35)"
             )
 
+        if self.enable_llm_analysis and not self.llm_base_url.strip():
+            raise ConfigurationError(
+                "ENABLE_LLM_ANALYSIS=true 이면 LLM_BASE_URL 을 지정해야 한다"
+            )
+
+        if self.enable_llm_analysis and not self.llm_model_name.strip():
+            raise ConfigurationError(
+                "ENABLE_LLM_ANALYSIS=true 이면 LLM_MODEL_NAME 을 지정해야 한다"
+            )
+
         if not self.allow_external_llm and self.llm_base_url and not _is_local_url(
             self.llm_base_url
         ):
@@ -309,25 +330,56 @@ class Settings(BaseSettings):
                 "보내려면 ALLOW_EXTERNAL_LLM=true 로 명시 승인해야 한다 (Harness §8.2)"
             )
 
+        if self.llm_base_url.startswith("http://") and not _is_local_url(self.llm_base_url):
+            # 외부 구간을 평문으로 지나면 녹취 본문이 그대로 노출된다 (Harness §8.2).
+            raise ConfigurationError(
+                "외부 LLM_BASE_URL 은 https 여야 한다. 평문 http 로는 녹취를 보내지 않는다"
+            )
+
         return self
 
 
-def _is_local_url(url: str) -> bool:
-    """루프백 또는 사설망 호스트인지 판별한다.
+# 사내망에서 흔히 쓰는 도메인 접미사. 이 이름들은 외부 승인 없이 허용한다.
+_INTERNAL_SUFFIXES: tuple[str, ...] = (
+    ".internal",
+    ".local",
+    ".lan",
+    ".intranet",
+    ".corp",
+    ".home",
+    ".svc",
+    ".cluster.local",
+)
 
-    완벽한 경계 판별은 아니다 — DNS 이름 뒤에 외부 주소가 있을 수 있다. 목적은
-    `api.openai.com` 같은 명백한 외부 주소를 실수로 설정하는 것을 막는 것이고,
-    실제 경계 통제는 네트워크 정책이 한다.
+
+def _is_local_url(url: str) -> bool:
+    """사내 경계 안의 주소로 볼 수 있는지 판별한다.
+
+    **완벽한 판별은 불가능하다.** DNS 이름 뒤에 무엇이 있는지는 여기서 알 수 없고,
+    실제 경계 통제는 네트워크 정책이 한다. 이 함수의 목적은 `api.openai.com` 같은
+    명백한 외부 주소를 실수로 설정하는 것을 막는 것이다. 판별이 애매하면 외부로 보고,
+    운영자가 `ALLOW_EXTERNAL_LLM` 으로 명시 승인하게 한다 — 안전한 쪽으로 틀린다.
     """
+    from contextlib import suppress
+    from ipaddress import ip_address
     from urllib.parse import urlparse
 
     host = (urlparse(url).hostname or "").lower()
-    if host in ("localhost", "127.0.0.1", "::1", "host.docker.internal"):
+    if not host:
+        return False
+
+    # IP 주소면 표준 판정을 쓴다. 접두사 비교는 172.16/12 대역을 놓친다.
+    # 호스트명이면 ValueError 가 나며, 아래 이름 규칙으로 넘어간다.
+    with suppress(ValueError):
+        address = ip_address(host)
+        return address.is_loopback or address.is_private or address.is_link_local
+
+    if host in ("localhost", "host.docker.internal"):
         return True
-    # 컨테이너 네트워크의 서비스 이름처럼 점이 없는 이름은 내부로 본다.
+    # 점이 없는 이름은 컨테이너·사내 호스트명으로 본다 (예: ollama, llm-server).
     if "." not in host:
         return True
-    return host.startswith(("10.", "192.168.", "172.16.", "172.17.", "172.18."))
+    return host.endswith(_INTERNAL_SUFFIXES)
 
 
 @lru_cache(maxsize=1)

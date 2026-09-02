@@ -204,23 +204,58 @@ python -m scripts.make_sample_audio --out-dir samples --set all
 프롬프트와 녹취는 **분리된 메시지로** 전달된다. 녹취 안에 지시문처럼 보이는 문장이
 있어도 데이터로만 다뤄진다 (Harness §13, SEC-024).
 
-### 켜는 법
+### 접속 설정
+
+**접속 정보는 전부 `.env` 에서 온다.** 새 LLM 을 붙이는 데 코드 변경도 배포도 필요 없다.
+
+| 키 | 설명 |
+|---|---|
+| `ENABLE_LLM_ANALYSIS` | 기능 on/off |
+| `LLM_PROVIDER` | `ollama` / `openai-compatible` / `mock` |
+| `LLM_BASE_URL` | 엔드포인트 주소. openai-compatible 은 보통 `/v1` 까지 |
+| `LLM_MODEL_NAME` | 모델 이름 |
+| `LLM_API_KEY` | 인증이 필요한 경우만. Bearer 로 전달되며 로그·응답에 남지 않는다 |
+| `LLM_JSON_MODE` | `json_schema`(권장) / `json_object`(구형 엔드포인트) |
+| `LLM_TIMEOUT_SECONDS` | 호출 상한 |
+| `LLM_MAX_TRANSCRIPT_CHARS` | 프롬프트에 실을 녹취 길이 상한 |
+| `ALLOW_EXTERNAL_LLM` | 외부 전송 명시 승인 |
+
+`openai-compatible` 하나로 OpenAI 형식 `/chat/completions` 를 말하는 모든 엔드포인트를
+붙인다 — OpenAI, Groq, vLLM, LM Studio, Ollama 의 `/v1` 등.
 
 ```bash
-ENABLE_LLM_ANALYSIS=true
-LLM_PROVIDER=ollama
-LLM_BASE_URL=http://ollama:11434     # 또는 호스트 Ollama 주소
-LLM_MODEL_NAME=gemma3:latest
+# 사내 vLLM
+LLM_PROVIDER=openai-compatible
+LLM_BASE_URL=http://llm.internal:8000/v1
+LLM_MODEL_NAME=Qwen2.5-14B-Instruct
+LLM_API_KEY=사내발급키
 ```
 
-LLM 을 어디에 둘지는 두 가지다.
+전체 예시는 `.env.example` 의 LLM 절에 있다.
+
+### 외부 주소 판별
+
+`ALLOW_EXTERNAL_LLM=false`(기본) 이면 외부로 보이는 주소에 기동을 거부한다.
+
+- **사내로 보는 것**: 루프백, 사설 대역(10/8, 172.16/12, 192.168/16), 점 없는
+  호스트명(`ollama`, `llm-server`), 사내 접미사(`.internal` `.local` `.corp`
+  `.lan` `.intranet` `.svc` `.cluster.local`)
+- **외부로 보는 것**: 그 외 전부
+
+판별이 애매하면 외부로 본다 — 안전한 쪽으로 틀린다. 실제 경계 통제는 네트워크 정책이
+하며, 이 검사는 `api.openai.com` 을 실수로 설정하는 것을 막는 용도다.
+
+외부 엔드포인트는 **https 여야 한다.** 평문 http 로는 녹취를 보내지 않는다.
+
+### LLM 을 어디에 둘 것인가
 
 | 방법 | 명령 | 주의 |
 |---|---|---|
-| 컨테이너로 함께 | `docker compose --profile llm up -d ollama` | 모델을 새로 받는다. 4B 기준 3GB+ 메모리 필요 |
-| 호스트 Ollama 사용 | `LLM_BASE_URL` 을 그 주소로 | Ollama 가 127.0.0.1 에만 바인딩되어 있으면 컨테이너에서 닿지 않는다 |
+| 이미 있는 사내 LLM | `LLM_BASE_URL` 만 지정 | 가장 단순하다 |
+| 컨테이너로 함께 | `docker compose --profile llm up -d ollama` | 모델을 새로 받는다. 4B 기준 3GB+ 메모리 |
+| 호스트 Ollama 사용 | `LLM_BASE_URL` 을 그 주소로 | 127.0.0.1 에만 바인딩되어 있으면 컨테이너에서 닿지 않는다 |
 
-호스트 Ollama 가 snap 으로 설치되어 있다면 노출 설정이 필요하다.
+호스트 Ollama 가 snap 이면 노출 설정이 필요하다.
 
 ```bash
 sudo snap set ollama host=0.0.0.0   # 그 뒤 재시작
