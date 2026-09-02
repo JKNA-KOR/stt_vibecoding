@@ -60,7 +60,7 @@ def bootstrap(settings: Settings) -> int:
                 username=username,
                 display_name=username,
                 role=UserRole.ADMIN,
-                password_hash=hash_password(password),
+                password_hash=hash_password(password, rounds=settings.bcrypt_rounds),
                 auth_provider="local",
             )
         )

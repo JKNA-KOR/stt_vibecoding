@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.config import ConfigurationError, Settings
 from app.core.exceptions import AuthenticationError
 from app.core.logging import get_logger
-from app.core.security import dummy_password_hash, verify_password
+from app.core.security import DEFAULT_BCRYPT_ROUNDS, dummy_password_hash, verify_password
 from app.storage.models import User
 from app.storage.repository import UserRepository
 
@@ -48,12 +48,20 @@ class LocalPasswordProvider(AuthProvider):
 
     provider_name: ClassVar[str] = "local"
 
+    def __init__(self, *, bcrypt_rounds: int = DEFAULT_BCRYPT_ROUNDS) -> None:
+        # 더미 해시의 비용 계수를 실제 해시와 맞추기 위해 설정값을 받는다 (FR-A-006).
+        self._bcrypt_rounds = bcrypt_rounds
+
     def authenticate(self, session: Session, *, username: str, password: str) -> User:
         user = UserRepository(session).get_by_username(username)
 
         # 사용자가 없어도 검증을 건너뛰지 않는다. 조기 반환하면 응답 시간이 짧아져
         # 계정 열거가 가능해진다 (FR-A-006, Harness §11).
-        password_hash = user.password_hash if user is not None else dummy_password_hash()
+        password_hash = (
+            user.password_hash
+            if user is not None
+            else dummy_password_hash(self._bcrypt_rounds)
+        )
         matched = verify_password(password, password_hash)
 
         if user is None or not matched:
@@ -122,5 +130,5 @@ def create_auth_provider(settings: Settings) -> AuthProvider:
             f"사용 가능: {', '.join(sorted(_REGISTRY))}"
         )
     if provider is LocalPasswordProvider:
-        return LocalPasswordProvider()
+        return LocalPasswordProvider(bcrypt_rounds=settings.bcrypt_rounds)
     return provider(settings)  # type: ignore[call-arg]

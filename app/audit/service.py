@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -40,7 +41,8 @@ _FORBIDDEN_METADATA_KEYS = frozenset(
     }
 )
 
-# 해시 체인에 포함할 필드. 순서를 바꾸면 기존 체인 검증이 깨지므로 변경 시 마이그레이션이 필요하다.
+# 해시 체인에 포함할 필드. 이 목록이나 `_canonical_value` 의 표현 규칙을 바꾸면 기존 체인
+# 검증이 깨지므로, 변경 시 재계산 마이그레이션이 필요하다 (Harness §19).
 _HASH_FIELDS = (
     "event_time", "event_type", "actor_id", "actor_role", "action",
     "target_type", "target_id", "result", "request_id", "job_id",
@@ -77,9 +79,22 @@ def _assert_metadata_is_safe(metadata: dict[str, Any]) -> None:
             )
 
 
+def _canonical_value(value: Any) -> Any:
+    """해시 입력을 드라이버·방언에 무관한 표현으로 고정한다.
+
+    시각을 `str()` 로 직렬화하면 표현이 드라이버마다 달라진다 — PostgreSQL 은 tz 를
+    보존하지만 SQLite 는 naive 로 돌려주므로, 기록 시점과 재계산 시점의 문자열이 달라져
+    체인 검증이 항상 실패한다. UTC ISO 문자열로 정규화해 그 의존을 없앤다.
+    """
+    if isinstance(value, datetime):
+        normalized = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        return normalized.astimezone(UTC).isoformat()
+    return value
+
+
 def _canonical_payload(values: dict[str, Any]) -> str:
     return json.dumps(
-        {key: values.get(key) for key in _HASH_FIELDS},
+        {key: _canonical_value(values.get(key)) for key in _HASH_FIELDS},
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,

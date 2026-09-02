@@ -51,7 +51,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # 테스트는 assert(S101) 와 하드코딩 더미 비밀번호(S105/S106) 사용이 정상이다.
-"tests/**" = ["S101", "S105", "S106", "ANN"]
+# TRY301: 예외 처리 경로를 검증하려면 테스트가 직접 raise 해야 한다.
+"tests/**" = ["S101", "S105", "S106", "ANN", "TRY301"]
 "migrations/**" = ["ANN", "E501"]
 
 [tool.ruff.lint.flake8-bandit]

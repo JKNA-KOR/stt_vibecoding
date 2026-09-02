@@ -27,6 +27,8 @@ def settings(tmp_path: Path) -> Settings:
         temp_dir=tmp_path / "data" / "tmp",
         # 테스트 전용 서명키. 운영 Secret 은 환경변수로만 주입된다 (SEC-022).
         session_secret="test-session-secret-value-at-least-32-chars",
+        # 테스트에서는 bcrypt 비용을 최소로 낮춘다. prod 하한(12)은 설정 검증이 강제한다.
+        bcrypt_rounds=4,
     )
 
 

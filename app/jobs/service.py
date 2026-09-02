@@ -23,6 +23,7 @@ from app.auth.principal import Principal
 from app.auth.roles import Permission
 from app.core.config import Settings
 from app.core.exceptions import (
+    AuthorizationError,
     ConflictError,
     NotFoundError,
     QueueError,
@@ -35,12 +36,23 @@ from app.storage.audio import AudioStore, cleanup_temp_file
 from app.storage.models import Job, Transcript
 from app.storage.repository import JobRepository, TranscriptRepository
 from app.storage.transcript import TranscriptStore
+from app.stt.formats import MEDIA_TYPES, TranscriptFormat, render
 from app.stt.normalization import NORMALIZER_VERSION
 from app.stt.preprocessing import PREPROCESSOR_VERSION
+from app.stt.schemas import TranscriptKind, TranscriptSegment
 
 logger = get_logger(__name__)
 
 _UPLOAD_ENDPOINT = "POST /api/jobs"
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadPayload:
+    """다운로드 응답 본문과 헤더 값."""
+
+    content: str
+    media_type: str
+    filename: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,6 +304,85 @@ class JobService:
         job = self.get_job(principal, job_id)
         principal.require(Permission.TRANSCRIPT_READ)
         return list(self._transcript_repo.list_for_job(job.id))
+
+    def read_transcript(
+        self, principal: Principal, job_id: str, kind: TranscriptKind
+    ) -> list[TranscriptSegment]:
+        """Transcript 본문을 읽는다. 조회 자체가 감사 대상이다 (Harness §17).
+
+        Raises:
+            NotFoundError: Job 을 볼 수 없거나 해당 종류의 Transcript 가 없는 경우.
+        """
+        job = self.get_job(principal, job_id)
+        principal.require(Permission.TRANSCRIPT_READ)
+        transcript = self._require_transcript(job.id, kind)
+
+        segments = self._transcripts.read_segments(transcript.storage_relpath)
+        self._audit.record(
+            AuditEventType.TRANSCRIPT_VIEWED,
+            actor=principal.to_audit_actor(),
+            action="view_transcript",
+            target_type="transcript",
+            target_id=transcript.id,
+            job_id=job.id,
+            metadata={"kind": kind.value, "segment_count": len(segments)},
+        )
+        return segments
+
+    def download_transcript(
+        self, principal: Principal, job_id: str, kind: TranscriptKind, fmt: TranscriptFormat
+    ) -> DownloadPayload:
+        """Transcript 를 요청한 형식으로 내보낸다 (FR-T-004).
+
+        다운로드 권한은 조회 권한과 별개로 관리된다 (FR-T-008). Feature Flag 로 서비스
+        전체에서 끌 수도 있다 (Harness §54).
+        """
+        if not self._settings.enable_transcript_download:
+            raise AuthorizationError(
+                "Transcript 다운로드가 비활성화되어 있습니다.",
+                internal_detail="ENABLE_TRANSCRIPT_DOWNLOAD is false",
+            )
+
+        job = self.get_job(principal, job_id)
+        principal.require(Permission.TRANSCRIPT_DOWNLOAD)
+        transcript = self._require_transcript(job.id, kind)
+
+        segments = self._transcripts.read_segments(transcript.storage_relpath)
+        content = render(
+            fmt,
+            segments,
+            metadata={
+                "job_id": job.id,
+                "kind": kind.value,
+                "language": transcript.language,
+                "processor": transcript.processor,
+                "processor_version": transcript.processor_version,
+            },
+        )
+        self._audit.record(
+            AuditEventType.TRANSCRIPT_DOWNLOADED,
+            actor=principal.to_audit_actor(),
+            action="download_transcript",
+            target_type="transcript",
+            target_id=transcript.id,
+            job_id=job.id,
+            metadata={"kind": kind.value, "format": fmt.value},
+        )
+        # 다운로드 파일명은 서버가 만든 Job id 로 구성한다. 원본 파일명을 그대로 쓰면
+        # 정제했더라도 헤더 인젝션 표면이 넓어진다 (Harness §6 / §11).
+        return DownloadPayload(
+            content=content,
+            media_type=MEDIA_TYPES[fmt],
+            filename=f"{job.id}.{kind.value.lower()}.{fmt.value}",
+        )
+
+    def _require_transcript(self, job_id: str, kind: TranscriptKind) -> Transcript:
+        transcript = self._transcript_repo.get_by_kind(job_id, kind)
+        if transcript is None:
+            raise NotFoundError(
+                internal_detail=f"transcript kind={kind} missing for job {job_id}"
+            )
+        return transcript
 
     def _can_read(self, principal: Principal, job: Job) -> bool:
         if principal.has(Permission.JOB_READ_ANY):

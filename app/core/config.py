@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     session_secret: SecretStr = SecretStr("")
     session_max_age_seconds: Annotated[int, Field(ge=60, le=86400)] = 28800
     session_cookie_secure: bool = False
+    # bcrypt 비용 계수. 하드웨어가 빨라지면 올려야 하는 값이므로 설정으로 둔다 (Harness §5.2).
+    # 낮추면 로그인이 빨라지는 대신 오프라인 크래킹 저항이 약해진다 — prod 하한을 강제한다.
+    bcrypt_rounds: Annotated[int, Field(ge=4, le=16)] = 12
     login_max_failed_attempts: Annotated[int, Field(ge=1, le=100)] = 5
     login_lock_seconds: Annotated[int, Field(ge=0)] = 900
 
@@ -233,6 +236,11 @@ class Settings(BaseSettings):
                 raise ConfigurationError(
                     "prod 환경에서 CORS 와일드카드는 허용되지 않는다 (Harness §11)"
                 )
+
+        if self.is_production and self.bcrypt_rounds < 12:
+            raise ConfigurationError(
+                "prod 환경에서 BCRYPT_ROUNDS 는 12 이상이어야 한다 (Harness §9)"
+            )
 
         if self.is_production and self.queue_backend != "celery":
             # Inline 큐는 업로드 요청을 전사 완료까지 블로킹한다 (Harness §24).

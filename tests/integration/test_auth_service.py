@@ -27,7 +27,7 @@ def make_auth(settings: Settings) -> Callable[..., AuthService]:
         return AuthService(
             session,
             settings=settings,
-            provider=LocalPasswordProvider(),
+            provider=LocalPasswordProvider(bcrypt_rounds=settings.bcrypt_rounds),
             sessions=SessionManager(settings),
         )
 
@@ -41,7 +41,7 @@ def account(database: None) -> str:  # noqa: ARG001
             id="user-9",
             username="agent",
             role=UserRole.USER,
-            password_hash=hash_password(_PASSWORD),
+            password_hash=hash_password(_PASSWORD, rounds=4),
             auth_provider="local",
         )
         session.add(user)
