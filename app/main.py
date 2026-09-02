@@ -18,6 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response
+from starlette.staticfiles import StaticFiles
 
 from app.api.routes import admin, auth, health, jobs, transcripts
 from app.core.config import Settings, get_settings
@@ -34,6 +35,7 @@ from app.core.security import SECURITY_HEADERS
 from app.storage.audio import AudioStore
 from app.storage.database import init_engine
 from app.storage.transcript import TranscriptStore
+from app.web import routes as web_routes
 
 logger = get_logger(__name__)
 
@@ -110,6 +112,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(jobs.router, prefix=API_PREFIX)
     app.include_router(transcripts.router, prefix=API_PREFIX)
     app.include_router(admin.router, prefix=API_PREFIX)
+
+    # 화면과 정적 자산. CSP 가 'self' 만 허용하므로 CSS/JS 는 반드시 같은 출처에서 온다.
+    # 외부 CDN 을 쓰지 않으므로 폐쇄망에서도 그대로 동작한다 (Harness §40 / §42).
+    app.mount(
+        "/static",
+        StaticFiles(directory=str(web_routes.STATIC_DIR)),
+        name="static",
+    )
+    app.include_router(web_routes.router)
     return app
 
 

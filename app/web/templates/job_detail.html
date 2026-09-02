@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}작업 상세 · STT 서비스{% endblock %}
+
+{% block content %}
+{# job_id 는 서버가 넘긴 값이며 autoescape 로 이스케이프된다. JS 는 data 속성에서 읽는다. #}
+<section class="card" id="job-card" data-job-id="{{ job_id }}"
+         data-can-download="{{ 'true' if can_download else 'false' }}">
+  <div class="card-head">
+    <h2 id="job-title">작업 상세</h2>
+    <a class="back-link" href="/">목록으로</a>
+  </div>
+
+  <dl class="facts" id="job-facts"></dl>
+
+  <div class="actions" id="job-actions"></div>
+</section>
+
+<section class="card" id="transcript-card" hidden>
+  <div class="card-head">
+    <h2>변환 결과</h2>
+    <div class="controls">
+      <label for="kind-select" class="sr-only">결과 종류</label>
+      <select id="kind-select">
+        <option value="NORMALIZED">정규화</option>
+        <option value="RAW">원본</option>
+      </select>
+      <div class="download-group" id="download-group" hidden>
+        <span class="hint-inline">다운로드</span>
+        <a class="download" data-format="txt" href="#">TXT</a>
+        <a class="download" data-format="srt" href="#">SRT</a>
+        <a class="download" data-format="vtt" href="#">VTT</a>
+        <a class="download" data-format="json" href="#">JSON</a>
+      </div>
+    </div>
+  </div>
+
+  <p class="hint" id="lineage-hint"></p>
+
+  {# 세그먼트는 JS 가 textContent 로만 넣는다. Transcript 는 Untrusted Data 다 (§13). #}
+  <ol class="segments" id="segments"></ol>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/job_detail.js"></script>
+{% endblock %}

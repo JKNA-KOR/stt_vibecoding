@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}STT 서비스{% endblock %}</title>
+  {# CSP 가 style-src 'self' 이므로 인라인 스타일을 쓸 수 없다. 전부 외부 파일이다. #}
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  {% if username %}
+  <header class="topbar">
+    <a class="brand" href="/">STT 서비스</a>
+    <nav class="nav">
+      <a href="/">작업</a>
+      {% if can_admin or can_audit %}<a href="/admin">관리</a>{% endif %}
+    </nav>
+    <div class="who">
+      {# Jinja2 autoescape 가 켜져 있다. 사용자명은 신뢰할 수 없는 값으로 다룬다. #}
+      <span class="username">{{ username }}</span>
+      <span class="role-badge">{{ role }}</span>
+      <button type="button" id="logout-button" class="link-button">로그아웃</button>
+    </div>
+  </header>
+  {% endif %}
+
+  <main class="content">
+    {# 전역 알림 영역. 메시지는 JS 가 textContent 로 넣는다 (FR-T-005). #}
+    <div id="notice" class="notice" hidden></div>
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="/static/app.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

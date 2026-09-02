@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}작업 목록 · STT 서비스{% endblock %}
+
+{% block content %}
+{% if can_upload %}
+<section class="card">
+  <h2>음성 업로드</h2>
+  <form id="upload-form">
+    <input type="file" id="audio-file" name="file"
+           accept=".wav,.mp3,.m4a,.flac,.ogg,.webm,.mp4" required>
+    <button type="submit" class="primary" id="upload-submit">업로드</button>
+  </form>
+  <p class="hint" id="upload-hint">
+    지원 형식: WAV, MP3, M4A, FLAC, OGG, WEBM, MP4
+  </p>
+  <div class="progress" id="upload-progress" hidden>
+    <div class="progress-bar" id="upload-progress-bar"></div>
+  </div>
+</section>
+{% endif %}
+
+<section class="card">
+  <div class="card-head">
+    <h2>작업 목록</h2>
+    <div class="controls">
+      <label for="status-filter" class="sr-only">상태 필터</label>
+      <select id="status-filter">
+        <option value="">전체 상태</option>
+        <option value="QUEUED">대기</option>
+        <option value="PROCESSING">처리중</option>
+        <option value="COMPLETED">완료</option>
+        <option value="FAILED">실패</option>
+        <option value="CANCELLED">취소</option>
+      </select>
+      <button type="button" id="refresh-button">새로고침</button>
+      <label class="checkbox">
+        <input type="checkbox" id="auto-refresh" checked> 자동 새로고침
+      </label>
+    </div>
+  </div>
+
+  <table class="table">
+    <thead>
+      <tr>
+        <th>파일명</th>
+        <th>상태</th>
+        <th>길이</th>
+        <th>생성 시각</th>
+        <th>RTF</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="jobs-body"></tbody>
+  </table>
+
+  <p class="empty" id="jobs-empty" hidden>작업이 없습니다.</p>
+
+  <div class="pager">
+    <button type="button" id="prev-page" disabled>이전</button>
+    <span id="page-info"></span>
+    <button type="button" id="next-page" disabled>다음</button>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/jobs.js"></script>
+{% endblock %}

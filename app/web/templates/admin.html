@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}관리 · STT 서비스{% endblock %}
+
+{% block content %}
+<section class="card" id="admin-root"
+         data-can-admin="{{ 'true' if can_admin else 'false' }}"
+         data-can-audit="{{ 'true' if can_audit else 'false' }}">
+  <h2>시스템 상태</h2>
+  {% if can_admin %}
+  <div class="status-grid" id="status-grid"></div>
+  <h3>작업 상태 분포</h3>
+  <div class="status-grid" id="job-counts"></div>
+  {% else %}
+  <p class="hint">감사 로그 조회 권한만 있습니다. 업무 데이터와 시스템 설정은 표시되지 않습니다.</p>
+  {% endif %}
+</section>
+
+{% if can_audit %}
+<section class="card">
+  <div class="card-head">
+    <h2>감사 로그</h2>
+    <div class="controls">
+      <label for="event-filter" class="sr-only">이벤트 종류</label>
+      <input type="text" id="event-filter" placeholder="이벤트 종류 (예: LOGIN_FAILED)"
+             maxlength="64">
+      <button type="button" id="audit-refresh">조회</button>
+      <button type="button" id="verify-chain">무결성 검증</button>
+    </div>
+  </div>
+  <p class="hint" id="chain-result"></p>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>시각</th>
+        <th>이벤트</th>
+        <th>주체</th>
+        <th>동작</th>
+        <th>결과</th>
+        <th>대상</th>
+      </tr>
+    </thead>
+    <tbody id="audit-body"></tbody>
+  </table>
+  <p class="empty" id="audit-empty" hidden>기록이 없습니다.</p>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/admin.js"></script>
+{% endblock %}
