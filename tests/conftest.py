@@ -9,12 +9,28 @@ from __future__ import annotations
 import math
 import struct
 import wave
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
 
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_from_dotenv() -> Iterator[None]:
+    """개발자의 `.env` 가 테스트 결과를 바꾸지 못하게 한다.
+
+    `Settings` 는 기본적으로 `.env` 를 읽는다. 그대로 두면 테스트가 "이 저장소에
+    .env 가 없다"는 우연에 의존하게 되고, 로컬에 .env 를 둔 사람에게만 깨진다.
+    테스트는 명시적으로 넘긴 값과 기본값만 봐야 한다.
+    """
+    original = Settings.model_config.get("env_file")
+    Settings.model_config["env_file"] = None
+    get_settings.cache_clear()
+    yield
+    Settings.model_config["env_file"] = original
+    get_settings.cache_clear()
 
 
 @pytest.fixture

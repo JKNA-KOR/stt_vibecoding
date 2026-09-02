@@ -24,6 +24,13 @@ x-app-env: &app-env
   SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
   BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
 
+  # 초기 관리자 생성 스크립트가 컨테이너 안에서 읽는 값이다. 계정을 만든 뒤에는
+  # .env 에서 비우고 서비스를 재시작한다 — prod 에 남아 있으면 기동이 거부된다
+  # (Harness §9 / §61-5). 기본값이 빈 문자열이므로 지정하지 않으면 스크립트가
+  # 아무것도 만들지 않고 종료한다.
+  BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-}
+  BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+
   # 런타임 계정은 DDL 권한이 없다 (SEC-026).
   DATABASE_URL: postgresql+psycopg://${STT_APP_DB_USER:-stt_app}:${STT_APP_DB_PASSWORD:?필요}@db:5432/${POSTGRES_DB:-stt}
   MIGRATION_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-stt_owner}:${POSTGRES_PASSWORD:?필요}@db:5432/${POSTGRES_DB:-stt}

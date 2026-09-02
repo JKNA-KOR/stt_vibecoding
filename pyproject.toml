@@ -54,6 +54,9 @@ ignore = [
 # TRY301: 예외 처리 경로를 검증하려면 테스트가 직접 raise 해야 한다.
 "tests/**" = ["S101", "S105", "S106", "ANN", "TRY301"]
 "migrations/**" = ["ANN", "E501"]
+# 개발자용 CLI 도구다. 구조화 로거가 아니라 사람이 읽을 표준출력이 맞고(T201),
+# 신호 생성용 random 은 암호 용도가 아니다(S311). 서비스 코드에는 이 예외가 없다.
+"scripts/make_sample_audio.py" = ["T201", "S311"]
 
 [tool.ruff.lint.flake8-bandit]
 # Harness §7: shell=True 는 어떤 경우에도 허용하지 않는다. ruff S602/S604 로 CI 에서 차단된다.
