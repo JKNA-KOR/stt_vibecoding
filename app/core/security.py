@@ -11,6 +11,7 @@ import hmac
 import re
 import secrets
 import unicodedata
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +59,19 @@ def hash_password(password: str) -> str:
     """bcrypt 해시를 반환한다. 평문은 어디에도 저장하지 않는다 (Harness §9)."""
     validate_password_strength(password)
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
+
+
+@lru_cache(maxsize=1)
+def dummy_password_hash() -> str:
+    """존재하지 않는 사용자에 대해서도 같은 비용의 검증을 수행하기 위한 해시 (FR-A-006).
+
+    임의 비밀번호로 실제 bcrypt 해시를 한 번 만들어 캐시한다. 형식만 흉내 낸 문자열을 쓰면
+    `verify_password` 가 해싱 없이 즉시 False 를 돌려주어, 사용자 존재 여부가 응답 시간
+    차이로 드러난다. 이 값은 어떤 입력과도 일치하지 않으며 프로세스마다 다르다.
+    """
+    return bcrypt.hashpw(secrets.token_urlsafe(32).encode("ascii"), bcrypt.gensalt()).decode(
+        "ascii"
+    )
 
 
 def verify_password(password: str, password_hash: str) -> bool:

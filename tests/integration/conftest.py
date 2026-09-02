@@ -36,6 +36,8 @@ def settings(tmp_path: Path) -> Settings:
         storage_root=tmp_path / "data",
         temp_dir=tmp_path / "data" / "tmp",
         stt_max_retries=1,
+        # 테스트 전용 서명키. 운영 Secret 은 환경변수로만 주입된다 (SEC-022).
+        session_secret="test-session-secret-value-at-least-32-chars",
     )
 
 
