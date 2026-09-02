@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.schemas.common import PageMeta
 from app.jobs.state import JobStatus
+from app.llm.state import AnalysisStatus
 from app.stt.schemas import TranscriptKind
 
 
@@ -34,6 +35,10 @@ class JobResponse(BaseModel):
     completed_at: datetime | None
     error_code: str | None
     retry_count: int
+
+    # 분석은 전사와 별개로 진행된다. 왜 분석이 없는지 화면에서 알 수 있어야 한다.
+    analysis_status: AnalysisStatus
+    analysis_error_code: str | None
 
     # 결과 재현에 필요한 정보 (Harness §20). 모델 아티팩트 해시까지는 노출하지 않는다.
     engine: str

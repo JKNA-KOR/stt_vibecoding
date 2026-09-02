@@ -49,6 +49,15 @@ x-app-env: &app-env
   STT_MAX_UPLOAD_MB: ${STT_MAX_UPLOAD_MB:-500}
   STT_MAX_AUDIO_MINUTES: ${STT_MAX_AUDIO_MINUTES:-180}
 
+  # LLM 분석 (Harness §8.2 / §54). 기본값은 꺼짐이다.
+  # 녹취 본문이 사내 경계를 벗어나지 않도록 로컬 LLM 을 전제로 한다.
+  ENABLE_LLM_ANALYSIS: ${ENABLE_LLM_ANALYSIS:-false}
+  LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+  LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434}
+  LLM_MODEL_NAME: ${LLM_MODEL_NAME:-gemma3:latest}
+  LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-300}
+  ALLOW_EXTERNAL_LLM: ${ALLOW_EXTERNAL_LLM:-false}
+
 services:
   db:
     image: postgres:18-alpine
@@ -127,6 +136,10 @@ services:
     build: .
     environment:
       <<: *app-env
+    # 호스트에서 도는 LLM(Ollama)에 닿기 위한 매핑. LLM 을 별도 컨테이너나 다른
+    # 호스트에 두면 LLM_BASE_URL 만 바꾸면 되고 이 줄은 필요 없다.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - sttdata:/data
       - ${STT_MODEL_DIR:-./models}:/models:ro
@@ -146,8 +159,24 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # 선택 서비스. LLM 을 컨테이너로 함께 띄운다.
+  #     docker compose --profile llm up -d ollama
+  # 호스트에 이미 Ollama 가 있고 외부 접속을 허용했다면 이 서비스는 필요 없다.
+  # 그 경우 LLM_BASE_URL 만 그 주소로 지정한다.
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["llm"]
+    volumes:
+      - ollama:/root/.ollama
+    # 컨테이너 안에서만 접근한다. 호스트로 열지 않는다.
+    expose:
+      - "11434"
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  # 프로필로 띄웠을 때만 쓰인다. 모델 가중치가 수 GB 이므로 별도 볼륨에 둔다.
+  ollama:
   # 음성과 Transcript 는 Confidential 이다 (Harness §8.1). 호스트 바인드 대신
   # 이름 있는 볼륨을 쓴다 — 실수로 저장소에 커밋될 여지를 없앤다.
   sttdata:

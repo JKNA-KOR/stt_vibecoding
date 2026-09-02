@@ -22,6 +22,7 @@ logger = get_logger(__name__)
 
 # 워커가 등록하는 태스크 이름. 워커 쪽 `@celery_app.task(name=...)` 와 반드시 일치해야 한다.
 STT_TASK_NAME = "app.jobs.worker.run_stt_job"
+ANALYSIS_TASK_NAME = "app.jobs.worker.run_analysis_job"
 
 # 전용 큐를 쓴다. 다른 종류의 작업과 섞이면 STT 동시 실행 수 제한이 무의미해진다.
 STT_QUEUE_NAME = "stt"
@@ -36,6 +37,17 @@ class JobQueue(ABC):
 
         Raises:
             QueueError: 큐에 접수하지 못한 경우. 조용히 성공한 척하지 않는다 (Harness §4.3).
+        """
+
+    @abstractmethod
+    def enqueue_analysis(self, job_id: str) -> None:
+        """LLM 분석을 큐에 넣는다.
+
+        전사와 같은 큐를 쓴다. 분석은 전사가 끝난 뒤에만 돌고 빈도도 낮아, 큐를
+        나누면 동시 실행 수 제한만 두 벌이 되고 얻는 것이 없다 (Harness §24).
+
+        Raises:
+            QueueError: 큐에 접수하지 못한 경우.
         """
 
     @abstractmethod
@@ -62,13 +74,25 @@ class InlineJobQueue(JobQueue):
     운영에서 쓰면 API 응답이 수 분간 멈춘다. `create_queue()` 가 prod 선택을 차단한다.
     """
 
-    def __init__(self, runner: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        runner: Callable[[str], None],
+        analysis_runner: Callable[[str], None] | None = None,
+    ) -> None:
         self._runner = runner
+        self._analysis_runner = analysis_runner
         self.enqueued: list[str] = []
+        self.analysis_enqueued: list[str] = []
 
     def enqueue(self, job_id: str) -> None:
         self.enqueued.append(job_id)
         self._runner(job_id)
+
+    def enqueue_analysis(self, job_id: str) -> None:
+        if self._analysis_runner is None:
+            raise QueueError(internal_detail="inline queue has no analysis runner")
+        self.analysis_enqueued.append(job_id)
+        self._analysis_runner(job_id)
 
     def depth(self) -> int:
         # 즉시 실행하므로 대기 중인 메시지가 존재하지 않는다.
@@ -95,9 +119,12 @@ class CeleryJobQueue(JobQueue):
         return self._app
 
     def enqueue(self, job_id: str) -> None:
+        self._send(STT_TASK_NAME, job_id)
+
+    def _send(self, task_name: str, job_id: str) -> None:
         try:
             self._celery().send_task(
-                STT_TASK_NAME,
+                task_name,
                 args=[job_id],
                 queue=STT_QUEUE_NAME,
                 # 결과를 폴링하지 않고 DB 의 Job 상태를 단일 진실로 삼는다.
@@ -105,11 +132,14 @@ class CeleryJobQueue(JobQueue):
             )
         except Exception as exc:
             logger.exception(
-                "failed to enqueue stt job",
+                "failed to enqueue task",
                 extra={"event": "QUEUE_ENQUEUE_FAILED", "job_id": job_id,
-                       "reason": type(exc).__name__},
+                       "task_name": task_name, "reason": type(exc).__name__},
             )
             raise QueueError(internal_detail=f"enqueue failed: {type(exc).__name__}") from exc
+
+    def enqueue_analysis(self, job_id: str) -> None:
+        self._send(ANALYSIS_TASK_NAME, job_id)
 
     def depth(self) -> int:
         """브로커 큐 길이. Redis 리스트 길이로 읽는다.
@@ -192,7 +222,12 @@ def create_celery_app(settings: Settings) -> Any:
     return app
 
 
-def create_queue(settings: Settings, *, runner: Callable[[str], None] | None = None) -> JobQueue:
+def create_queue(
+    settings: Settings,
+    *,
+    runner: Callable[[str], None] | None = None,
+    analysis_runner: Callable[[str], None] | None = None,
+) -> JobQueue:
     """설정(`QUEUE_BACKEND`)에 맞는 큐 구현을 만든다.
 
     환경 이름으로 백엔드를 추론하지 않는다. 그런 추론은 설정 파일만 봐서는 어떤 경로로
@@ -200,10 +235,14 @@ def create_queue(settings: Settings, *, runner: Callable[[str], None] | None = N
     `Settings` 검증이 기동 시점에 차단한다.
 
     Args:
-        runner: Inline 구현이 호출할 실행 함수. 생략하면 워커 파이프라인을 지연 임포트한다.
+        runner: Inline 구현이 호출할 전사 실행 함수. 생략하면 워커를 지연 임포트한다.
+        analysis_runner: Inline 구현이 호출할 분석 실행 함수. 생략 시 동일.
     """
     if settings.queue_backend == "inline":
-        return InlineJobQueue(runner or _default_runner(settings))
+        return InlineJobQueue(
+            runner or _default_runner(settings),
+            analysis_runner or _default_analysis_runner(settings),
+        )
     return CeleryJobQueue(settings)
 
 
@@ -219,5 +258,16 @@ def _default_runner(settings: Settings) -> Callable[[str], None]:
         from app.jobs.worker import execute_job
 
         execute_job(job_id, settings=settings)
+
+    return run
+
+
+def _default_analysis_runner(settings: Settings) -> Callable[[str], None]:
+    """Inline 큐의 기본 분석 실행자. `_default_runner` 와 같은 이유로 설정을 명시한다."""
+
+    def run(job_id: str) -> None:
+        from app.jobs.worker import execute_analysis
+
+        execute_analysis(job_id, settings=settings)
 
     return run

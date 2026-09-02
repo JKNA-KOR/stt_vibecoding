@@ -15,6 +15,45 @@
   {% endif %}
 </section>
 
+{% if can_admin %}
+<section class="card">
+  <div class="card-head">
+    <h2>분석 프롬프트</h2>
+    <div class="controls">
+      <button type="button" id="prompt-save">저장</button>
+      <button type="button" id="prompt-reset">기본값 복원</button>
+    </div>
+  </div>
+  <p class="hint">
+    변경하면 다음 분석부터 즉시 반영됩니다. 결과 해석이 달라지므로 변경 사유가 함께 기록됩니다.
+  </p>
+  <label for="prompt-text">프롬프트</label>
+  <textarea id="prompt-text" rows="12" spellcheck="false"></textarea>
+  <label for="prompt-reason">변경 사유</label>
+  <input type="text" id="prompt-reason" maxlength="500" placeholder="예: 요약 품질 개선">
+</section>
+
+<section class="card">
+  <h2>사용자</h2>
+  <table class="table">
+    <thead>
+      <tr><th>아이디</th><th>역할</th><th>상태</th><th>인증</th><th></th></tr>
+    </thead>
+    <tbody id="users-body"></tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>설정 변경 이력</h2>
+  <table class="table">
+    <thead>
+      <tr><th>시각</th><th>키</th><th>변경자</th><th>사유</th></tr>
+    </thead>
+    <tbody id="config-history-body"></tbody>
+  </table>
+</section>
+{% endif %}
+
 {% if can_audit %}
 <section class="card">
   <div class="card-head">

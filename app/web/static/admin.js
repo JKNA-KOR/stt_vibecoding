@@ -93,3 +93,133 @@ document.addEventListener("DOMContentLoaded", () => {
     loadAudit();
   }
 });
+
+/* --- 런타임 설정 · 사용자 관리 (FR-M-003 / FR-M-004) ---------------------- */
+
+const ANALYSIS_PROMPT_KEY = "llm_analysis_prompt";
+const ROLES = ["USER", "REVIEWER", "ADMIN", "AUDITOR"];
+
+async function loadPrompt() {
+  const box = document.getElementById("prompt-text");
+  if (!box) return;
+  try {
+    const payload = await request(`/admin/config/${ANALYSIS_PROMPT_KEY}`);
+    box.value = payload.value;
+  } catch (error) {
+    notifyError(error);
+  }
+}
+
+async function savePrompt() {
+  const reason = document.getElementById("prompt-reason").value.trim();
+  if (!reason) {
+    notify("변경 사유를 입력해 주세요.", "error");
+    return;
+  }
+  try {
+    await request(`/admin/config/${ANALYSIS_PROMPT_KEY}`, {
+      method: "PUT",
+      json: { value: document.getElementById("prompt-text").value, reason },
+    });
+    notify("프롬프트를 저장했습니다. 다음 분석부터 반영됩니다.", "success");
+    document.getElementById("prompt-reason").value = "";
+    await loadConfigHistory();
+  } catch (error) {
+    notifyError(error);
+  }
+}
+
+async function resetPrompt() {
+  if (!window.confirm("프롬프트를 기본값으로 되돌릴까요?")) return;
+  try {
+    await request(`/admin/config/${ANALYSIS_PROMPT_KEY}`, { method: "DELETE" });
+    notify("기본값으로 복원했습니다.", "success");
+    await loadPrompt();
+    await loadConfigHistory();
+  } catch (error) {
+    notifyError(error);
+  }
+}
+
+async function loadUsers() {
+  const body = document.getElementById("users-body");
+  if (!body) return;
+  try {
+    const payload = await request("/admin/users");
+    body.replaceChildren();
+    for (const user of payload.items) {
+      const row = document.createElement("tr");
+      row.appendChild(el("td", null, user.username));
+
+      const roleCell = el("td");
+      const select = document.createElement("select");
+      for (const role of ROLES) {
+        const option = document.createElement("option");
+        option.value = role;
+        option.textContent = role;
+        option.selected = role === user.role;
+        select.appendChild(option);
+      }
+      roleCell.appendChild(select);
+      row.appendChild(roleCell);
+
+      row.appendChild(el("td", null, user.is_active ? "활성" : "비활성"));
+      row.appendChild(el("td", null, user.auth_provider));
+
+      const actionCell = el("td");
+      const apply = el("button", null, "역할 변경");
+      apply.addEventListener("click", () => changeRole(user.id, select.value));
+      actionCell.appendChild(apply);
+      row.appendChild(actionCell);
+
+      body.appendChild(row);
+    }
+  } catch (error) {
+    notifyError(error);
+  }
+}
+
+async function changeRole(userId, role) {
+  const reason = window.prompt("변경 사유를 입력해 주세요.");
+  if (!reason) return;
+  try {
+    await request(`/admin/users/${encodeURIComponent(userId)}/role`, {
+      method: "PUT",
+      json: { role, reason },
+    });
+    notify("역할을 변경했습니다. 다음 요청부터 적용됩니다.", "success");
+    await loadUsers();
+  } catch (error) {
+    notifyError(error);
+  }
+}
+
+async function loadConfigHistory() {
+  const body = document.getElementById("config-history-body");
+  if (!body) return;
+  try {
+    const payload = await request("/admin/config/history/all?limit=20");
+    body.replaceChildren();
+    for (const row of payload.items) {
+      const tr = document.createElement("tr");
+      tr.appendChild(el("td", null, formatTimestamp(row.changed_at)));
+      tr.appendChild(el("td", null, row.config_key));
+      tr.appendChild(el("td", null, row.changed_by));
+      tr.appendChild(el("td", null, row.reason));
+      body.appendChild(tr);
+    }
+  } catch (error) {
+    notifyError(error);
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const root = document.getElementById("admin-root");
+  if (root.dataset.canAdmin !== "true") return;
+
+  document.getElementById("prompt-save").addEventListener("click", savePrompt);
+  document.getElementById("prompt-reset").addEventListener("click", resetPrompt);
+  loadPrompt();
+  loadUsers();
+  loadConfigHistory();
+});

@@ -6,21 +6,30 @@ AUDITOR 는 감사 로그만 볼 수 있고 업무 데이터에는 접근하지 
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.common import db_session, require_permission, settings_dep
+from app.api.dependencies.common import (
+    csrf_protected,
+    db_session,
+    require_permission,
+    settings_dep,
+)
+from app.api.schemas.analysis import ConfigUpdateRequest, RoleUpdateRequest, UserSummary
 from app.audit.events import AuditEventType
 from app.audit.service import AuditService, verify_chain
 from app.auth.principal import Principal
-from app.auth.roles import Permission
+from app.auth.roles import Permission, UserRole
 from app.core.config import Settings
+from app.core.exceptions import NotFoundError, ValidationError
+from app.core.runtime_config import EDITABLE_KEYS, RuntimeConfigService
 from app.jobs.queue import create_queue
 from app.jobs.state import JobStatus
-from app.storage.models import AuditEvent, Job
+from app.storage.models import AuditEvent, ConfigChange, Job, User
 from app.stt.factory import get_engine
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -112,6 +121,168 @@ def read_audit_log(
         "limit": limit,
         "offset": offset,
     }
+
+
+# --- 런타임 설정 (FR-M-004, Harness §37) ---------------------------------------
+
+
+@router.get("/config")
+def list_config(
+    principal: Annotated[Principal, Depends(require_permission(Permission.ADMIN_MANAGE))],
+    session: Session = Depends(db_session),
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    """런타임에 바꿀 수 있는 설정 목록. 긴 값(프롬프트)은 잘려서 온다."""
+    entries = RuntimeConfigService(session, settings=settings).list_all()
+    return {"items": [asdict(entry) for entry in entries]}
+
+
+@router.get("/config/{key}")
+def get_config(
+    key: str,
+    principal: Annotated[Principal, Depends(require_permission(Permission.ADMIN_MANAGE))],
+    session: Session = Depends(db_session),
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    """단건 조회. 프롬프트 전문을 받을 때 쓴다."""
+    service = RuntimeConfigService(session, settings=settings)
+    if key not in EDITABLE_KEYS:
+        raise NotFoundError(internal_detail=f"config key '{key}' is not editable")
+    return {"key": key, "value": service.get(key)}
+
+
+@router.put("/config/{key}")
+def update_config(
+    key: str,
+    payload: ConfigUpdateRequest,
+    principal: Annotated[Principal, Depends(csrf_protected)],
+    session: Session = Depends(db_session),
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, str]:
+    """설정을 바꾸고 변경 이력을 남긴다.
+
+    CSRF 와 별개로 관리 권한을 다시 확인한다 — 상태 변경 경로는 인증만으로 부족하다
+    (SEC-013).
+    """
+    principal.require(Permission.ADMIN_MANAGE)
+    RuntimeConfigService(session, settings=settings).set(
+        key, payload.value, actor=principal.to_audit_actor(), reason=payload.reason
+    )
+    return {"status": "ok"}
+
+
+@router.delete("/config/{key}")
+def reset_config(
+    key: str,
+    principal: Annotated[Principal, Depends(csrf_protected)],
+    session: Session = Depends(db_session),
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, str]:
+    """덮어쓴 값을 지워 코드 기본값으로 되돌린다."""
+    principal.require(Permission.ADMIN_MANAGE)
+    RuntimeConfigService(session, settings=settings).reset(
+        key, actor=principal.to_audit_actor(), reason="기본값 복원"
+    )
+    return {"status": "ok"}
+
+
+@router.get("/config/history/all")
+def config_history(
+    principal: Annotated[Principal, Depends(require_permission(Permission.ADMIN_MANAGE))],
+    limit: int = Query(default=50, ge=1, le=200),
+    session: Session = Depends(db_session),
+) -> dict[str, object]:
+    """설정 변경 이력 (Harness §37)."""
+    rows = (
+        session.execute(select(ConfigChange).order_by(ConfigChange.id.desc()).limit(limit))
+        .scalars()
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "changed_at": row.changed_at,
+                "changed_by": row.changed_by,
+                "config_key": row.config_key,
+                "previous_value": row.previous_value,
+                "new_value": row.new_value,
+                "reason": row.reason,
+            }
+            for row in rows
+        ]
+    }
+
+
+# --- 사용자 관리 (FR-M-003, Harness §10 / §17) ---------------------------------
+
+
+@router.get("/users")
+def list_users(
+    principal: Annotated[Principal, Depends(require_permission(Permission.ADMIN_MANAGE))],
+    session: Session = Depends(db_session),
+) -> dict[str, object]:
+    rows = session.execute(select(User).order_by(User.username)).scalars().all()
+    return {
+        "items": [
+            UserSummary(
+                id=row.id,
+                username=row.username,
+                role=str(row.role),
+                is_active=row.is_active,
+                auth_provider=row.auth_provider,
+            ).model_dump()
+            for row in rows
+        ]
+    }
+
+
+@router.put("/users/{user_id}/role")
+def change_user_role(
+    user_id: str,
+    payload: RoleUpdateRequest,
+    principal: Annotated[Principal, Depends(csrf_protected)],
+    session: Session = Depends(db_session),
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, str]:
+    """사용자 역할을 바꾼다 (FR-M-003).
+
+    클라이언트가 보낸 역할 값을 그대로 신뢰하지 않고 열거형으로 검증한다. 자기 자신의
+    권한은 낮출 수 없다 — 마지막 관리자가 스스로를 강등시키면 복구 경로가 사라진다.
+    """
+    principal.require(Permission.ADMIN_MANAGE)
+
+    try:
+        new_role = UserRole(payload.role)
+    except ValueError as exc:
+        raise ValidationError(
+            "알 수 없는 역할입니다.", internal_detail=f"unknown role '{payload.role}'"
+        ) from exc
+
+    if user_id == principal.id and new_role is not UserRole.ADMIN:
+        raise ValidationError(
+            "본인의 관리자 권한은 해제할 수 없습니다.",
+            internal_detail="self-demotion is refused to keep an admin path open",
+        )
+
+    user = session.get(User, user_id)
+    if user is None:
+        raise NotFoundError(internal_detail=f"user {user_id} not found")
+
+    previous = str(user.role)
+    user.role = new_role
+    session.flush()
+
+    AuditService(session, application_version=settings.app_version).record(
+        AuditEventType.USER_ROLE_CHANGED,
+        actor=principal.to_audit_actor(),
+        action="change_user_role",
+        target_type="user",
+        target_id=user.id,
+        # 사용자명은 남기지 않는다. target_id 로 추적 가능하다 (Harness §46).
+        metadata={"previous_role": previous, "new_role": new_role.value,
+                  "reason_length": len(payload.reason)},
+    )
+    return {"status": "ok"}
 
 
 @router.get("/audit/integrity")

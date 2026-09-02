@@ -249,3 +249,19 @@ button.danger { color: var(--danger); border-color: var(--danger); }
 }
 
 [hidden] { display: none !important; }
+
+/* --- AI 분석 --- */
+
+.inline-list { margin: 0; padding-left: 18px; }
+.inline-list li { margin-bottom: 2px; }
+
+textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  resize: vertical;
+}

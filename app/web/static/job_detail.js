@@ -26,6 +26,8 @@ const FACT_LABELS = [
   ["detected_language", "감지 언어"],
   ["retry_count", "재시도 횟수"],
   ["error_code", "오류 코드"],
+  ["analysis_status", "분석 상태"],
+  ["analysis_error_code", "분석 오류"],
 ];
 
 function formatFact(key, job) {
@@ -194,7 +196,13 @@ async function loadJob() {
     if (job.status === "COMPLETED") {
       await loadTranscript();
       await loadLineage();
-      stopPolling();
+      await loadAnalysis();
+      // 분석은 전사보다 오래 걸린다. 끝날 때까지 상태를 계속 확인한다.
+      if (job.analysis_status === "QUEUED" || job.analysis_status === "PROCESSING") {
+        startPolling();
+      } else {
+        stopPolling();
+      }
     } else {
       document.getElementById("transcript-card").hidden = true;
       if (job.status === "QUEUED" || job.status === "PROCESSING") startPolling();
@@ -235,4 +243,84 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   loadJob();
+});
+
+/* --- AI 분석 (FR-T-010) ---------------------------------------------------
+ *
+ * 분석 결과도 LLM 이 만들어 낸 신뢰할 수 없는 텍스트다. Transcript 와 마찬가지로
+ * textContent 로만 넣는다 (Harness §13).
+ */
+
+function renderAnalysisList(dl, label, items) {
+  if (!items || items.length === 0) return;
+  dl.appendChild(el("dt", null, label));
+  const dd = el("dd");
+  const ul = el("ul", "inline-list");
+  for (const item of items) ul.appendChild(el("li", null, item));
+  dd.appendChild(ul);
+  dl.appendChild(dd);
+}
+
+function renderAnalysis(payload) {
+  const dl = document.getElementById("analysis-facts");
+  dl.replaceChildren();
+
+  renderAnalysisList(dl, "요약", payload.summary);
+  renderAnalysisList(dl, "키워드", payload.keywords);
+  renderAnalysisList(dl, "후속 조치", payload.action_items);
+
+  for (const [label, value] of [
+    ["고객 반응", payload.customer_reaction],
+    ["접촉 분류", payload.contact_classification],
+    ["감성", payload.sentiment],
+    ["상담 의견", payload.opinion],
+  ]) {
+    if (!value) continue;
+    dl.appendChild(el("dt", null, label));
+    dl.appendChild(el("dd", null, value));
+  }
+
+  // 어떤 모델과 프롬프트로 나온 결과인지 화면에도 드러낸다 (Harness §20).
+  document.getElementById("analysis-meta").textContent =
+    `${payload.provider} / ${payload.model_name} / 프롬프트 ${payload.prompt_version}`;
+
+  const warning = document.getElementById("analysis-warning");
+  const notes = [];
+  if (payload.transcript_truncated) notes.push("입력이 길어 앞부분만 분석되었습니다.");
+  if (payload.warnings.length > 0) notes.push(`모델 응답 경고: ${payload.warnings.join(", ")}`);
+  warning.textContent = notes.join(" ");
+  warning.hidden = notes.length === 0;
+
+  document.getElementById("analysis-card").hidden = false;
+}
+
+async function loadAnalysis() {
+  try {
+    renderAnalysis(await request(`/jobs/${encodeURIComponent(detail.jobId)}/analysis`));
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      // 아직 분석하지 않았거나 기능이 꺼져 있다. 오류로 알릴 일은 아니다.
+      document.getElementById("analysis-card").hidden = true;
+      return;
+    }
+    notifyError(error);
+  }
+}
+
+async function requestAnalysis() {
+  const button = document.getElementById("reanalyze-button");
+  button.disabled = true;
+  try {
+    await request(`/jobs/${encodeURIComponent(detail.jobId)}/analysis`, { method: "POST" });
+    notify("분석을 요청했습니다. 완료까지 시간이 걸릴 수 있습니다.", "success");
+    await loadJob();
+  } catch (error) {
+    notifyError(error);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("reanalyze-button").addEventListener("click", requestAnalysis);
 });

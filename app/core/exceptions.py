@@ -21,6 +21,7 @@ class ErrorCode(StrEnum):
     AUDIO_TOO_LONG = "AUDIO_TOO_LONG"
     AUDIO_DECODE_ERROR = "AUDIO_DECODE_ERROR"
     STT_MODEL_ERROR = "STT_MODEL_ERROR"
+    LLM_ERROR = "LLM_ERROR"
     GPU_RESOURCE_ERROR = "GPU_RESOURCE_ERROR"
     QUEUE_ERROR = "QUEUE_ERROR"
     DATABASE_ERROR = "DATABASE_ERROR"
@@ -41,6 +42,7 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.AUDIO_TOO_LONG: "허용된 재생시간을 초과했습니다.",
     ErrorCode.AUDIO_DECODE_ERROR: "음성 파일을 처리할 수 없습니다.",
     ErrorCode.STT_MODEL_ERROR: "음성 인식 처리 중 오류가 발생했습니다.",
+    ErrorCode.LLM_ERROR: "분석 처리 중 오류가 발생했습니다.",
     ErrorCode.GPU_RESOURCE_ERROR: "처리 자원이 부족합니다. 잠시 후 다시 시도해 주세요.",
     ErrorCode.QUEUE_ERROR: "작업을 접수할 수 없습니다. 잠시 후 다시 시도해 주세요.",
     ErrorCode.DATABASE_ERROR: "일시적인 오류가 발생했습니다.",
@@ -60,6 +62,7 @@ _HTTP_STATUS: dict[ErrorCode, int] = {
     ErrorCode.AUDIO_TOO_LONG: 413,
     ErrorCode.AUDIO_DECODE_ERROR: 422,
     ErrorCode.STT_MODEL_ERROR: 500,
+    ErrorCode.LLM_ERROR: 500,
     ErrorCode.GPU_RESOURCE_ERROR: 503,
     ErrorCode.QUEUE_ERROR: 503,
     ErrorCode.DATABASE_ERROR: 500,
@@ -157,6 +160,17 @@ class AudioDecodeError(ApplicationError):
 class STTModelError(ApplicationError):
     def __init__(self, message: str | None = None, **kwargs: Any) -> None:
         super().__init__(ErrorCode.STT_MODEL_ERROR, message, **kwargs)
+
+
+class LLMError(ApplicationError):
+    """LLM 호출 실패 (Harness §4.3).
+
+    분석은 부가 기능이므로 실패해도 Transcript 는 그대로 남는다. 그래도 조용히
+    넘기지 않고 기록해, 왜 분석이 없는지 화면에서 알 수 있게 한다.
+    """
+
+    def __init__(self, message: str | None = None, **kwargs: Any) -> None:
+        super().__init__(ErrorCode.LLM_ERROR, message, **kwargs)
 
 
 class QueueError(ApplicationError):

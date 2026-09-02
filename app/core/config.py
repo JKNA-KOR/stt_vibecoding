@@ -30,6 +30,9 @@ AUDITED_CONFIG_KEYS: frozenset[str] = frozenset(
         "audio_retention_days",
         "transcript_retention_days",
         "audit_retention_days",
+        # LLM 분석은 결과 해석을 바꾸므로 변경 이력을 남긴다 (Harness §37).
+        "enable_llm_analysis",
+        "llm_model_name",
     }
 )
 
@@ -145,6 +148,23 @@ class Settings(BaseSettings):
     enable_ffmpeg_preprocess: bool = False
     enable_llm_correction: bool = False
     enable_diarization: bool = False
+
+    # --- LLM 후처리 분석 (Harness §2.1 / §8.2 / §13 / §54) ---
+    #
+    # `enable_llm_correction` 과는 다른 기능이다. 교정은 Transcript 본문을 바꾸지만,
+    # 분석은 요약·분류·키워드만 만들고 원본은 건드리지 않는다. 그래서 교정은 여전히
+    # 범위 밖이고 분석만 구현되어 있다.
+    enable_llm_analysis: bool = False
+    llm_provider: Literal["ollama", "mock"] = "ollama"
+    # 로컬에서 도는 LLM 만 기본으로 허용한다. 녹취 본문을 외부로 보내는 것은 SEC-021
+    # 위반이므로, 외부 Provider 는 아래 승인 플래그 없이는 선택 자체가 거부된다.
+    llm_base_url: str = "http://127.0.0.1:11434"
+    llm_model_name: str = "gemma3:latest"
+    llm_timeout_seconds: Annotated[int, Field(ge=10, le=3600)] = 300
+    # 프롬프트에 실어 보낼 Transcript 길이 상한. 넘으면 잘라 보내고 그 사실을 기록한다.
+    llm_max_transcript_chars: Annotated[int, Field(ge=1000, le=200000)] = 20000
+    # 외부 LLM 전송 승인. 켜려면 개인정보 영향평가와 위탁 계약이 선행되어야 한다 (§8.2).
+    allow_external_llm: bool = False
 
     ffmpeg_binary: str = "/usr/bin/ffmpeg"
     ffmpeg_timeout_seconds: Annotated[int, Field(ge=1, le=7200)] = 600
@@ -267,12 +287,47 @@ class Settings(BaseSettings):
             )
 
         if self.enable_llm_correction or self.enable_diarization:
-            # Harness §2.1: STT Core 와 분리된 후처리 모듈은 아직 존재하지 않는다.
+            # Harness §2.1: Transcript 본문을 고쳐 쓰는 교정과 화자분리는 아직 없다.
+            # 원본을 바꾸지 않는 분석(`enable_llm_analysis`)은 구현되어 있으며 별개다.
             raise ConfigurationError(
-                "LLM 교정 / 화자분리는 본 버전 범위 밖이다. 해당 Feature Flag 를 끄고 기동한다."
+                "LLM 교정 / 화자분리는 본 버전 범위 밖이다. 해당 Feature Flag 를 끄고 기동한다. "
+                "요약·분류가 필요하면 ENABLE_LLM_ANALYSIS 를 쓴다."
+            )
+
+        if self.enable_llm_analysis and self.llm_provider == "mock" and self.is_production:
+            # 가짜 분석 결과가 운영 화면에 표시되는 것은 조용한 실패 중 최악이다 (§4.3).
+            raise ConfigurationError(
+                "prod 환경에서 LLM_PROVIDER='mock' 은 허용되지 않는다 (Harness §35)"
+            )
+
+        if not self.allow_external_llm and self.llm_base_url and not _is_local_url(
+            self.llm_base_url
+        ):
+            # 녹취 본문이 사내 경계를 벗어나는 것은 명시적 승인 없이는 막는다 (SEC-021).
+            raise ConfigurationError(
+                f"LLM_BASE_URL 이 외부 주소({self.llm_base_url})다. 녹취 본문을 외부로 "
+                "보내려면 ALLOW_EXTERNAL_LLM=true 로 명시 승인해야 한다 (Harness §8.2)"
             )
 
         return self
+
+
+def _is_local_url(url: str) -> bool:
+    """루프백 또는 사설망 호스트인지 판별한다.
+
+    완벽한 경계 판별은 아니다 — DNS 이름 뒤에 외부 주소가 있을 수 있다. 목적은
+    `api.openai.com` 같은 명백한 외부 주소를 실수로 설정하는 것을 막는 것이고,
+    실제 경계 통제는 네트워크 정책이 한다.
+    """
+    from urllib.parse import urlparse
+
+    host = (urlparse(url).hostname or "").lower()
+    if host in ("localhost", "127.0.0.1", "::1", "host.docker.internal"):
+        return True
+    # 컨테이너 네트워크의 서비스 이름처럼 점이 없는 이름은 내부로 본다.
+    if "." not in host:
+        return True
+    return host.startswith(("10.", "192.168.", "172.16.", "172.17.", "172.18."))
 
 
 @lru_cache(maxsize=1)

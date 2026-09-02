@@ -45,6 +45,10 @@ def settings(tmp_path: Path) -> Settings:
         session_secret="test-session-secret-value-at-least-32-chars",
         # 테스트에서는 bcrypt 비용을 최소로 낮춘다. prod 하한(12)은 설정 검증이 강제한다.
         bcrypt_rounds=4,
+        # 분석은 Mock Provider 로 검증한다. 외부·로컬 LLM 에 의존하지 않는다.
+        enable_llm_analysis=True,
+        llm_provider="mock",
+
     )
 
 

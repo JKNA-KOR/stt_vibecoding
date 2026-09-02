@@ -33,6 +33,7 @@ from sqlalchemy.types import JSON
 from app.audit.events import AuditEventType, AuditResult
 from app.auth.roles import UserRole
 from app.jobs.state import JobStatus
+from app.llm.state import AnalysisStatus
 from app.storage.database import Base
 from app.stt.schemas import TranscriptKind
 
@@ -151,6 +152,12 @@ class Job(Base):
     # --- 처리 이력 / 성능 지표 (Harness §30) ---
     idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 분석은 전사와 별개로 진행된다. 실패해도 Job 은 COMPLETED 로 남으므로,
+    # 왜 분석이 없는지 화면에서 알 수 있도록 별도 상태를 둔다.
+    analysis_status: Mapped[AnalysisStatus] = mapped_column(
+        String(20), nullable=False, default=AnalysisStatus.NONE
+    )
+    analysis_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, index=True
@@ -172,6 +179,9 @@ class Job(Base):
 
     owner: Mapped[User] = relationship(back_populates="jobs")
     transcripts: Mapped[list[Transcript]] = relationship(
+        back_populates="job", cascade="all, delete-orphan"
+    )
+    analyses: Mapped[list[TranscriptAnalysis]] = relationship(
         back_populates="job", cascade="all, delete-orphan"
     )
 
@@ -221,6 +231,64 @@ class Transcript(Base):
         CheckConstraint(
             "kind IN ('RAW','NORMALIZED','LLM_CORRECTED')", name="ck_transcript_kind"
         ),
+    )
+
+
+class TranscriptAnalysis(Base):
+    """LLM 분석 결과 (Harness §50 / §51).
+
+    Transcript 본문을 바꾸지 않고 파생 결과만 따로 둔다. 분석이 실패하거나 프롬프트가
+    바뀌어도 전사 결과는 그대로다.
+
+    분석 내용은 녹취에서 파생되었으므로 **원본과 같은 Confidential 등급**이며 보관기간도
+    Transcript 를 따른다 (Harness §8.1 / §21).
+    """
+
+    __tablename__ = "stt_analysis"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=new_uuid)
+    job_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("stt_job.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # 어떤 Transcript 를 보고 만든 결과인지 (Harness §51 lineage).
+    transcript_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("stt_transcript.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # --- 분석 본문 ---
+    summary: Mapped[list | None] = mapped_column(JsonType, nullable=True)
+    keywords: Mapped[list | None] = mapped_column(JsonType, nullable=True)
+    action_items: Mapped[list | None] = mapped_column(JsonType, nullable=True)
+    customer_reaction: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    contact_classification: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    sentiment: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    opinion: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    # --- Provenance (Harness §20 / §36) ---
+    # 프롬프트가 바뀌면 결과가 달라진다. 어떤 조합으로 나온 분석인지 남겨야
+    # 나중에 "이 결과가 왜 이런가"에 답할 수 있다.
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 입력이 잘렸는지, 열거형을 벗어난 값이 있었는지 등. 결과 해석에 영향을 준다.
+    transcript_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    warnings: Mapped[list | None] = mapped_column(JsonType, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    job: Mapped[Job] = relationship(back_populates="analyses")
+
+    __table_args__ = (
+        # Job 당 최신 분석 하나만 유지한다. 재분석은 기존 행을 대체한다.
+        UniqueConstraint("job_id", name="uq_analysis_job"),
     )
 
 

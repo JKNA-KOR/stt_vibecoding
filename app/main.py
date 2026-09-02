@@ -20,7 +20,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
 
-from app.api.routes import admin, auth, health, jobs, transcripts
+from app.api.routes import admin, analysis, auth, health, jobs, transcripts
 from app.core.config import Settings, get_settings
 from app.core.context import (
     mask_ip,
@@ -111,6 +111,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth.router, prefix=API_PREFIX)
     app.include_router(jobs.router, prefix=API_PREFIX)
     app.include_router(transcripts.router, prefix=API_PREFIX)
+    app.include_router(analysis.router, prefix=API_PREFIX)
     app.include_router(admin.router, prefix=API_PREFIX)
 
     # 화면과 정적 자산. CSP 가 'self' 만 허용하므로 CSS/JS 는 반드시 같은 출처에서 온다.

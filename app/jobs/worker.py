@@ -22,6 +22,8 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import ApplicationError, ErrorCode, NotFoundError
 from app.core.logging import get_logger
 from app.jobs.state import JobStatus, assert_transition
+from app.llm.service import AnalysisService
+from app.llm.state import AnalysisStatus
 from app.storage.audio import AudioStore
 from app.storage.database import session_scope
 from app.storage.models import Job, Transcript, ensure_utc
@@ -189,6 +191,28 @@ def _run_pipeline(job_id: str, *, settings: Settings) -> None:
         _discard_transcript_files(transcript_store, written)
         raise
 
+    if settings.enable_llm_analysis:
+        # 커밋이 끝난 뒤에 발행한다. 트랜잭션 안에서 보내면 롤백된 Job 에 대해
+        # 분석 메시지만 남아 워커가 없는 결과를 찾게 된다.
+        _enqueue_analysis(job_id, settings=settings)
+
+
+def _enqueue_analysis(job_id: str, *, settings: Settings) -> None:
+    from app.jobs.queue import create_queue
+
+    try:
+        create_queue(settings).enqueue_analysis(job_id)
+    except Exception as exc:  # noqa: BLE001 - 분석 접수 실패가 전사 성공을 무효로 만들지 않는다
+        logger.exception(
+            "failed to enqueue analysis; transcript is still available",
+            extra={"event": "ANALYSIS_ENQUEUE_FAILED", "job_id": job_id,
+                   "reason": type(exc).__name__},
+        )
+        _mark_analysis_failed(
+            job_id, settings=settings, code=ErrorCode.QUEUE_ERROR,
+            detail=type(exc).__name__,
+        )
+
 
 def _reload_processing_job(session: Session, job_id: str) -> Job | None:
     """전사 결과를 반영할 Job 을 다시 잠근다.
@@ -333,6 +357,12 @@ def _store_results(
         },
     )
 
+    if settings.enable_llm_analysis:
+        # 분석은 별도 태스크로 넘긴다. 여기서 바로 돌리면 LLM 응답을 기다리는 동안
+        # 전사 워커 슬롯이 묶여 뒤의 Job 이 밀린다 (Harness §24).
+        job.analysis_status = AnalysisStatus.QUEUED
+        session.flush()
+
 
 def _discard_transcript_files(store: TranscriptStore, relpaths: list[str]) -> None:
     """참조를 얻지 못한 Transcript 파일을 지운다.
@@ -446,3 +476,76 @@ def _progress_logger(job_id: str) -> Callable[[float], None]:
         )
 
     return report
+
+
+def execute_analysis(job_id: str, *, settings: Settings | None = None) -> None:
+    """LLM 분석 하나를 끝까지 처리한다 (FR-T-010).
+
+    전사와 마찬가지로 예외를 밖으로 던지지 않는다. 실패는 `analysis_status` 와 Audit 에
+    기록되며, Job 자체는 COMPLETED 로 남는다 — 분석이 실패해도 전사 결과는 유효하다.
+    """
+    settings = settings or get_settings()
+
+    if not settings.enable_llm_analysis:
+        # 요청 시점에는 켜져 있었는데 그 사이 꺼졌을 수 있다. 실패와 구분해 기록한다.
+        _mark_analysis_skipped(job_id, settings=settings)
+        return
+
+    try:
+        with session_scope() as session:
+            _analysis_service(session, settings).run_analysis(job_id)
+    except ApplicationError as exc:
+        logger.warning(
+            "analysis failed",
+            extra={
+                "event": "ANALYSIS_FAILED",
+                "job_id": job_id,
+                "error_code": exc.code.value,
+                "failure_detail": exc.internal_detail,
+            },
+        )
+        _mark_analysis_failed(
+            job_id, settings=settings, code=exc.code, detail=exc.internal_detail or ""
+        )
+    except Exception as exc:  # noqa: BLE001 - 분류되지 않은 오류도 상태로 남겨야 한다
+        logger.exception(
+            "analysis crashed",
+            extra={"event": "ANALYSIS_CRASHED", "job_id": job_id,
+                   "reason": type(exc).__name__},
+        )
+        _mark_analysis_failed(
+            job_id, settings=settings, code=ErrorCode.INTERNAL_ERROR,
+            detail=type(exc).__name__,
+        )
+
+
+def _analysis_service(session: Session, settings: Settings) -> AnalysisService:
+    # 지연 임포트가 아니라 상단 임포트를 쓴다 — 분석 계층은 STT 엔진을 끌어오지 않는다.
+    return AnalysisService(
+        session, settings=settings, transcript_store=TranscriptStore(settings)
+    )
+
+
+def _mark_analysis_failed(
+    job_id: str, *, settings: Settings, code: ErrorCode, detail: str
+) -> None:
+    try:
+        with session_scope() as session:
+            _analysis_service(session, settings).mark_failed(job_id, code.value, detail)
+    except Exception:  # noqa: BLE001 - 상태 기록 실패까지 예외를 올리면 원인이 가려진다
+        logger.exception(
+            "failed to record analysis failure",
+            extra={"event": "ANALYSIS_STATE_WRITE_FAILED", "job_id": job_id},
+        )
+
+
+def _mark_analysis_skipped(job_id: str, *, settings: Settings) -> None:
+    with session_scope() as session:
+        job = JobRepository(session).get(job_id)
+        if job is None:
+            return
+        job.analysis_status = AnalysisStatus.SKIPPED
+    logger.info(
+        "analysis skipped because the feature is disabled",
+        extra={"event": "ANALYSIS_SKIPPED", "job_id": job_id},
+    )

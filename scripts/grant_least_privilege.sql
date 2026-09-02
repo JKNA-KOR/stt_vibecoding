@@ -12,7 +12,7 @@
 
 -- 업무 테이블: 일반적인 CRUD.
 GRANT SELECT, INSERT, UPDATE, DELETE ON
-    app_user, stt_job, stt_transcript, idempotency_record, runtime_config
+    app_user, stt_job, stt_transcript, stt_analysis, idempotency_record, runtime_config
 TO :"app_user";
 
 -- 설정 변경 이력도 추가 전용이다 (Harness §37).
