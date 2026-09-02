@@ -1,0 +1,31 @@
+# 이미지에 들어가면 안 되는 것 (Harness §8 / §9 / §57).
+.git/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Secret 과 실데이터는 어떤 경우에도 이미지에 굽지 않는다.
+.env
+.env.*
+!.env.example
+data/
+models/
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.webm
+*.log
+
+# 빌드에 불필요한 것
+tests/
+docs/
+deploy/
+STT_HARNESS_RULES.md
+README.md

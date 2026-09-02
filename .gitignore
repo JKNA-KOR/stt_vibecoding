@@ -5,7 +5,11 @@
 
 # Harness §8/§57: 음성 원본과 Transcript 는 Confidential 이므로 저장소에 들어가지 않는다.
 /data/
-/models/
+# 모델 디렉터리 자체는 남기고 내용만 제외한다. compose 가 여기를 읽기 전용
+# 마운트하므로 디렉터리가 없으면 도커가 root 소유로 만들어 버린다.
+# (디렉터리를 통째로 제외하면 하위 파일을 다시 포함시킬 수 없다.)
+/models/*
+!/models/.gitkeep
 *.wav
 *.mp3
 *.m4a

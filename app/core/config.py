@@ -100,6 +100,9 @@ class Settings(BaseSettings):
 
     # --- 저장소 -------------------------------------------------------------
     database_url: str = "postgresql+psycopg://stt_app:stt_app@127.0.0.1:5432/stt"
+    # 마이그레이션 전용 접속. 런타임 계정은 DDL 권한을 갖지 않아야 하므로(SEC-026)
+    # 스키마 소유자 계정을 따로 쓴다. 비워 두면 `database_url` 을 그대로 사용한다.
+    migration_database_url: str = ""
     redis_url: str = "redis://127.0.0.1:6379/0"
     # Harness §2.2 / NFR-004: 큐 백엔드는 교체 가능하다. inline 은 브로커 없이 호출 스레드에서
     # 즉시 실행하므로 테스트·로컬 전용이며, 아래 검증이 운영 환경에서의 선택을 막는다.
@@ -147,6 +150,11 @@ class Settings(BaseSettings):
     ffmpeg_timeout_seconds: Annotated[int, Field(ge=1, le=7200)] = 600
 
     # --- 파생 값 ------------------------------------------------------------
+
+    @property
+    def migration_url(self) -> str:
+        """마이그레이션에 쓸 접속 문자열. 지정되지 않으면 런타임 접속을 쓴다."""
+        return self.migration_database_url or self.database_url
 
     @property
     def is_production(self) -> bool:

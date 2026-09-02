@@ -1,0 +1,146 @@
+# STT 서비스 로컬/개발 스택 (Harness §34 / §38 / §56).
+#
+# 운영 배포용이 아니다. 운영에서는 DB·Redis 를 관리형 또는 별도 호스트에 두고, 이
+# 파일의 애플리케이션 정의만 참고한다. 값은 전부 .env 에서 온다 (§5.2).
+#
+#   cp .env.example .env      # 값을 채운다 (SESSION_SECRET, DB 비밀번호)
+#   docker compose up -d db redis
+#   docker compose run --rm migrate
+#   docker compose up -d api worker
+#
+# 메모리 산정은 docs/OPERATIONS.md 를 참고한다. 이 머신에서 medium 모델과 전체 스택을
+# 동시에 띄우면 스왑이 발생한다.
+
+name: stt-service
+
+x-app-env: &app-env
+  APP_ENV: ${APP_ENV:-local}
+  APP_VERSION: ${APP_VERSION:-1.0.0}
+  GIT_COMMIT: ${GIT_COMMIT:-unknown}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  DEBUG: ${DEBUG:-false}
+
+  SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET 이 필요하다 (Harness §9)}
+  SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+  BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
+
+  # 런타임 계정은 DDL 권한이 없다 (SEC-026).
+  DATABASE_URL: postgresql+psycopg://${STT_APP_DB_USER:-stt_app}:${STT_APP_DB_PASSWORD:?필요}@db:5432/${POSTGRES_DB:-stt}
+  MIGRATION_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-stt_owner}:${POSTGRES_PASSWORD:?필요}@db:5432/${POSTGRES_DB:-stt}
+  REDIS_URL: redis://redis:6379/0
+  QUEUE_BACKEND: ${QUEUE_BACKEND:-celery}
+
+  STT_ENGINE: ${STT_ENGINE:-faster-whisper}
+  STT_MODEL_NAME: ${STT_MODEL_NAME:-medium}
+  STT_MODEL_PATH: ${STT_MODEL_PATH:-}
+  STT_DEVICE: ${STT_DEVICE:-cpu}
+  STT_COMPUTE_TYPE: ${STT_COMPUTE_TYPE:-int8}
+  STT_LANGUAGE: ${STT_LANGUAGE:-ko}
+  STT_CPU_THREADS: ${STT_CPU_THREADS:-4}
+  STT_ALLOW_MODEL_DOWNLOAD: ${STT_ALLOW_MODEL_DOWNLOAD:-false}
+  STT_MAX_CONCURRENT_JOBS: ${STT_MAX_CONCURRENT_JOBS:-2}
+  STT_MAX_UPLOAD_MB: ${STT_MAX_UPLOAD_MB:-500}
+  STT_MAX_AUDIO_MINUTES: ${STT_MAX_AUDIO_MINUTES:-180}
+
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stt_owner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?필요}
+      POSTGRES_DB: ${POSTGRES_DB:-stt}
+      STT_APP_DB_USER: ${STT_APP_DB_USER:-stt_app}
+      STT_APP_DB_PASSWORD: ${STT_APP_DB_PASSWORD:?필요}
+    volumes:
+      # PostgreSQL 18 이미지는 데이터를 메이저 버전별 하위 디렉터리에 두며
+      # /var/lib/postgresql/data 직접 마운트를 거부한다. 상위 경로를 마운트한다.
+      - pgdata:/var/lib/postgresql
+      # 첫 기동에만 실행된다. 런타임 계정을 만든다 (테이블 권한은 마이그레이션 후).
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./scripts/grant_least_privilege.sql:/opt/grant_least_privilege.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stt_owner} -d ${POSTGRES_DB:-stt}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    # 개발 편의를 위한 노출. 운영에서는 포트를 열지 않는다.
+    ports:
+      - "127.0.0.1:${DB_PORT:-5433}:5432"
+    restart: unless-stopped
+
+  redis:
+    image: redis:8-alpine
+    # 영속화를 끈다. 큐 메시지가 유실되어도 Job 상태는 DB 가 단일 진실이며,
+    # 유실된 작업은 관리 화면에서 재시도할 수 있다 (Harness §25).
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # 일회성 마이그레이션. 스키마 소유자 계정으로 실행된다.
+  migrate:
+    build: .
+    environment:
+      <<: *app-env
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    environment:
+      <<: *app-env
+    volumes:
+      - sttdata:/data
+      # 모델은 이미지에 굽지 않고 마운트한다 (Harness §42). 읽기 전용이다.
+      - ${STT_MODEL_DIR:-./models}:/models:ro
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # /live 를 쓴다. /ready 는 의존 대상 상태를 반영하므로 컨테이너 생존 판단에
+      # 쓰면 DB 가 잠깐 흔들릴 때 멀쩡한 프로세스가 재시작된다 (Harness §56).
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/live')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  worker:
+    build: .
+    environment:
+      <<: *app-env
+    volumes:
+      - sttdata:/data
+      - ${STT_MODEL_DIR:-./models}:/models:ro
+    command:
+      - celery
+      - -A
+      - app.jobs.celery_worker
+      - worker
+      - --queues=stt
+      - --loglevel=INFO
+      # 동시 실행 수는 설정에서 오지만, Celery CLI 에도 명시해 둔다.
+      - --concurrency=${STT_MAX_CONCURRENT_JOBS:-2}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  # 음성과 Transcript 는 Confidential 이다 (Harness §8.1). 호스트 바인드 대신
+  # 이름 있는 볼륨을 쓴다 — 실수로 저장소에 커밋될 여지를 없앤다.
+  sttdata:

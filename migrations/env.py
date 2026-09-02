@@ -26,7 +26,8 @@ target_metadata = Base.metadata
 
 
 def _database_url() -> str:
-    return get_settings().database_url
+    """마이그레이션 접속. 런타임 계정과 분리할 수 있다 (SEC-026)."""
+    return get_settings().migration_url
 
 
 def run_migrations_offline() -> None:
