@@ -18,6 +18,8 @@ include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# 저장소 루트를 임포트 경로에 넣어 설치 없이도 `app` 을 임포트할 수 있게 한다.
+pythonpath = ["."]
 addopts = "-ra --strict-markers"
 markers = [
     "golden: Golden Audio STT 회귀 테스트 (실제 모델 필요, 기본 skip)",

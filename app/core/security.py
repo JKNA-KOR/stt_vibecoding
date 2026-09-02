@@ -49,7 +49,9 @@ def validate_password_strength(password: str) -> None:
         )
     )
     if classes < 3:
-        raise ValidationError("비밀번호는 영문 대/소문자, 숫자, 특수문자 중 3종류 이상을 포함해야 합니다.")
+        raise ValidationError(
+            "비밀번호는 영문 대/소문자, 숫자, 특수문자 중 3종류 이상을 포함해야 합니다."
+        )
 
 
 def hash_password(password: str) -> str:

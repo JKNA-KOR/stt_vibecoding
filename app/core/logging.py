@@ -4,7 +4,8 @@ Audit Log 와는 목적도 저장소도 다르다. 여기서 다루는 것은 �
 사용자 행위 추적은 `app/audit` 가 DB 에 별도로 기록한다.
 
 핵심 제약:
-  * 구조화 JSON 으로 출력하고 `timestamp/level/service/environment/event/request_id` 를 항상 포함한다.
+  * 구조화 JSON 으로 출력하고 `timestamp/level/service/environment/event/request_id` 를
+    항상 포함한다.
   * 민감 필드는 출력 직전에 자동 마스킹한다. 개별 호출부의 주의력에 의존하지 않는다 (Harness §15).
 """
 

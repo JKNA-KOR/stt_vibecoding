@@ -205,7 +205,9 @@ class Settings(BaseSettings):
         if self.is_production:
             # Harness §35: Production Debug 금지.
             if self.debug:
-                raise ConfigurationError("prod 환경에서 DEBUG=true 는 허용되지 않는다 (Harness §35)")
+                raise ConfigurationError(
+                    "prod 환경에서 DEBUG=true 는 허용되지 않는다 (Harness §35)"
+                )
             if self.log_level == "DEBUG":
                 raise ConfigurationError(
                     "prod 환경에서 LOG_LEVEL=DEBUG 는 허용되지 않는다 (Harness §35)"
@@ -225,7 +227,9 @@ class Settings(BaseSettings):
                     "prod 환경에 BOOTSTRAP_ADMIN_PASSWORD 가 남아 있다 (Harness §9)"
                 )
             if "*" in self.cors_origins:
-                raise ConfigurationError("prod 환경에서 CORS 와일드카드는 허용되지 않는다 (Harness §11)")
+                raise ConfigurationError(
+                    "prod 환경에서 CORS 와일드카드는 허용되지 않는다 (Harness §11)"
+                )
 
         if self.temp_file_max_age_hours <= 0:
             raise ConfigurationError("임시파일 무기한 보관은 허용되지 않는다 (Harness §21)")

@@ -1,7 +1,8 @@
 """Transcript 내보내기 형식 (FR-T-004).
 
 Transcript 는 Untrusted Data 다 (Harness §13). 여기서 만드는 것은 순수 텍스트 산출물이며,
-어떤 형식도 실행 가능한 문서(HTML 등)로 만들지 않는다. 화면 표시는 템플릿 자동 이스케이프가 담당한다.
+어떤 형식도 실행 가능한 문서(HTML 등)로 만들지 않는다.
+화면 표시는 템플릿 자동 이스케이프가 담당한다.
 """
 
 from __future__ import annotations

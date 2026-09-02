@@ -33,8 +33,8 @@ from sqlalchemy.types import JSON
 from app.audit.events import AuditEventType, AuditResult
 from app.auth.roles import UserRole
 from app.jobs.state import JobStatus
-from app.stt.schemas import TranscriptKind
 from app.storage.database import Base
+from app.stt.schemas import TranscriptKind
 
 # PostgreSQL 에서는 JSONB, 테스트용 SQLite 에서는 JSON 으로 동작하도록 variant 를 쓴다.
 JsonType = JSON().with_variant(JSONB(), "postgresql")

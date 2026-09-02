@@ -175,6 +175,7 @@ def convert_with_ffmpeg(
     if completed.returncode != 0:
         # stderr 전문은 파일 경로를 포함할 수 있으므로 앞부분만 로그에 남긴다 (Harness §44).
         stderr_head = completed.stderr.decode("utf-8", errors="replace")[:200]
+        # 여기는 except 블록이 아니라 반환코드 검사 지점이므로 exc_info 를 붙이지 않는다.
         logger.error(
             "ffmpeg conversion failed",
             extra={

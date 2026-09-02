@@ -24,7 +24,12 @@ from app.core.exceptions import (
     ValidationError,
 )
 from app.core.logging import get_logger
-from app.core.security import extract_extension, resolve_within, sanitize_display_filename, sha256_file
+from app.core.security import (
+    extract_extension,
+    resolve_within,
+    sanitize_display_filename,
+    sha256_file,
+)
 from app.stt.preprocessing import AudioProbe, probe_audio, verify_file_signature
 
 logger = get_logger(__name__)
@@ -127,7 +132,7 @@ class AudioStore:
         try:
             shutil.move(str(temp_path), str(destination))
         except OSError as exc:
-            logger.error(
+            logger.exception(
                 "failed to move uploaded audio into storage",
                 extra={"event": "AUDIO_STORE_FAILED", "reason": type(exc).__name__},
             )
@@ -182,7 +187,7 @@ class AudioStore:
             )
             return False
         except OSError as exc:
-            logger.error(
+            logger.exception(
                 "audio delete failed",
                 extra={"event": "AUDIO_DELETE_FAILED", "reason": type(exc).__name__},
             )
@@ -201,7 +206,7 @@ def cleanup_temp_file(path: Path) -> None:
     except FileNotFoundError:
         return
     except OSError as exc:
-        logger.error(
+        logger.exception(
             "temp file cleanup failed",
             extra={"event": "TEMP_CLEANUP_FAILED", "reason": type(exc).__name__},
         )

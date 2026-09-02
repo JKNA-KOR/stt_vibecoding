@@ -78,7 +78,7 @@ class TranscriptStore:
             )
             temp_path.replace(destination)
         except OSError as exc:
-            logger.error(
+            logger.exception(
                 "transcript write failed",
                 extra={
                     "event": "TRANSCRIPT_WRITE_FAILED",
@@ -102,7 +102,7 @@ class TranscriptStore:
         except FileNotFoundError as exc:
             raise StorageError(internal_detail="transcript file missing") from exc
         except (OSError, json.JSONDecodeError) as exc:
-            logger.error(
+            logger.exception(
                 "transcript read failed",
                 extra={"event": "TRANSCRIPT_READ_FAILED", "reason": type(exc).__name__},
             )
@@ -139,7 +139,7 @@ class TranscriptStore:
             )
             return False
         except OSError as exc:
-            logger.error(
+            logger.exception(
                 "transcript delete failed",
                 extra={"event": "TRANSCRIPT_DELETE_FAILED", "reason": type(exc).__name__},
             )
