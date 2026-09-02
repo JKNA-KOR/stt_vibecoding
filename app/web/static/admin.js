@@ -18,7 +18,10 @@ async function loadStatus() {
     grid.appendChild(statTile("엔진", status.model.engine));
     grid.appendChild(statTile("모델", status.model.model_name));
     grid.appendChild(statTile("연산 방식", `${status.model.device_type} / ${status.model.compute_type}`));
-    grid.appendChild(statTile("모델 적재", status.model.is_loaded ? "적재됨" : "미적재"));
+    // 모델은 워커가 적재한다. API 프로세스의 적재 여부는 의미가 없으므로 워커 생존을 보여준다.
+    grid.appendChild(
+      statTile("워커", status.workers_online < 0 ? "조회 불가" : `${status.workers_online}대`),
+    );
     // 큐 길이를 알 수 없으면 -1 이 온다. 숫자를 그대로 보여주면 오해를 부른다.
     grid.appendChild(
       statTile("큐 길이", status.queue_depth < 0 ? "조회 불가" : String(status.queue_depth)),

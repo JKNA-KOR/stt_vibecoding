@@ -51,6 +51,17 @@ uvicorn app.main:create_app --factory --reload
 `QUEUE_BACKEND=inline` 은 브로커 없이 업로드 요청 스레드에서 바로 전사한다.
 테스트·로컬 전용이며 운영에서 선택하면 기동이 거부된다.
 
+## 테스트용 샘플 녹취
+
+```bash
+pip install edge-tts
+python -m scripts.make_sample_recording --out-dir samples   # 들을 수 있는 상담 통화 (인터넷 필요)
+python -m scripts.make_sample_audio --out-dir samples --set all   # 신호만 + 거부 케이스 (오프라인)
+```
+
+실제 고객 녹취를 테스트에 쓰지 않는다 (SEC-040). 대본은 지어낸 것이며 산출물은
+커밋하지 않는다. 자세한 내용은 [`docs/OPERATIONS.md`](docs/OPERATIONS.md) §4.1.
+
 ## 구조
 
 ```

@@ -46,19 +46,20 @@ def system_status(
     for job_status, count in grouped:
         counts[JobStatus(job_status).value] = int(count)
 
-    engine = get_engine(settings)
-    description = engine.describe()
+    queue = create_queue(settings)
+    description = get_engine(settings).describe()
     return {
         "jobs": counts,
-        "queue_depth": create_queue(settings).depth(),
+        "queue_depth": queue.depth(),
+        # 모델은 워커 프로세스가 적재한다. API 프로세스의 적재 여부를 보고하면 항상
+        # "미적재"로 나와 오해를 부르므로, 여기서는 설정된 모델과 워커 생존을 답한다.
         "model": {
             "engine": description.engine,
             "model_name": description.model_name,
-            "model_version": description.model_version,
             "compute_type": description.compute_type,
             "device_type": description.device_type,
-            "is_loaded": description.is_loaded,
         },
+        "workers_online": queue.online_workers(),
         "limits": {
             "max_concurrent_jobs": settings.stt_max_concurrent_jobs,
             "queue_max_length": settings.stt_queue_max_length,

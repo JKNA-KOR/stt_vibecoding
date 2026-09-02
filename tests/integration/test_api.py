@@ -371,6 +371,9 @@ def test_admin_status_reports_queue_and_model(client: TestClient) -> None:
     assert "jobs" in body
     assert body["model"]["engine"] == "mock"
     assert body["limits"]["max_concurrent_jobs"] >= 1
+    # 모델은 워커가 적재하므로 API 는 워커 생존을 보고한다 (FR-M-002).
+    assert "workers_online" in body
+    assert "is_loaded" not in body["model"]
 
 
 def test_auditor_reads_audit_but_not_business_data(client: TestClient, wav: Path) -> None:

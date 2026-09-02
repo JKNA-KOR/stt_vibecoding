@@ -46,6 +46,14 @@ class JobQueue(ABC):
     def is_healthy(self) -> bool:
         """브로커에 연결 가능한지. `/ready` 가 사용한다 (FR-H-002)."""
 
+    @abstractmethod
+    def online_workers(self) -> int:
+        """응답하는 워커 수. 알 수 없으면 -1 을 반환한다 (FR-M-002).
+
+        모델은 워커 프로세스가 적재하므로, API 프로세스에서 "모델이 올라갔는가"를
+        묻는 것은 의미가 없다. 대신 처리할 워커가 살아 있는지를 답한다.
+        """
+
 
 class InlineJobQueue(JobQueue):
     """큐 없이 호출 스레드에서 즉시 실행하는 구현.
@@ -68,6 +76,10 @@ class InlineJobQueue(JobQueue):
 
     def is_healthy(self) -> bool:
         return True
+
+    def online_workers(self) -> int:
+        # 호출 스레드가 곧 워커다.
+        return 1
 
 
 class CeleryJobQueue(JobQueue):
@@ -119,6 +131,21 @@ class CeleryJobQueue(JobQueue):
                 extra={"event": "QUEUE_DEPTH_UNAVAILABLE", "reason": type(exc).__name__},
             )
             return -1
+
+    def online_workers(self) -> int:
+        """Celery control ping 으로 살아 있는 워커 수를 센다.
+
+        조회 실패는 서비스 실패가 아니므로 -1 을 돌려주고 판단은 호출부에 맡긴다.
+        """
+        try:
+            replies = self._celery().control.ping(timeout=1.0)
+        except Exception as exc:  # noqa: BLE001 - 지표 조회 실패는 서비스 실패가 아니다
+            logger.warning(
+                "worker ping failed",
+                extra={"event": "WORKER_PING_FAILED", "reason": type(exc).__name__},
+            )
+            return -1
+        return len(replies or [])
 
     def is_healthy(self) -> bool:
         try:
