@@ -1,0 +1,57 @@
+[project]
+name = "stt-service"
+version = "1.0.0"
+description = "녹취 파일 STT 변환·저장·관리 웹 서비스 (faster-whisper 기반)"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+
+# 런타임 의존성의 단일 출처는 requirements.txt 이다 (Harness §4.5 / §40).
+# 여기서 중복 선언하면 두 목록이 어긋날 수 있으므로 의도적으로 비워 둔다.
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "golden: Golden Audio STT 회귀 테스트 (실제 모델 필요, 기본 skip)",
+    "requires_model: 실제 STT 모델 아티팩트가 있어야 실행 가능",
+]
+filterwarnings = ["error::DeprecationWarning:app.*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle / pyflakes
+    "I",             # import 정렬
+    "B",             # bugbear
+    "S",             # flake8-bandit (보안)
+    "ANN",           # 타입 힌트 (Harness §52)
+    "T20",           # print 금지 — 구조화 로거만 사용 (Harness §16)
+    "TRY",           # 예외 처리 안티패턴 (Harness §4.3)
+    "SIM",
+    "UP",
+]
+ignore = [
+    "ANN401",  # **kwargs: Any 허용
+    "TRY003",  # 예외 메시지 인라인 허용
+    "B008",    # FastAPI Depends() 기본값 패턴
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 테스트는 assert(S101) 와 하드코딩 더미 비밀번호(S105/S106) 사용이 정상이다.
+"tests/**" = ["S101", "S105", "S106", "ANN"]
+"migrations/**" = ["ANN", "E501"]
+
+[tool.ruff.lint.flake8-bandit]
+# Harness §7: shell=True 는 어떤 경우에도 허용하지 않는다. ruff S602/S604 로 CI 에서 차단된다.
+check-typed-exception = true

@@ -1,0 +1,37 @@
+# Harness §4.5 / §40: 직접 의존성만 명시하고 버전을 고정한다.
+# 전이 의존성까지 포함한 재현 가능한 잠금 파일은 아래 명령으로 생성한다.
+#   .venv/bin/pip install -r requirements.txt && .venv/bin/pip freeze > requirements.lock.txt
+#
+# 검증 환경: Python 3.14.4 / linux x86_64 (2026-09-01)
+# 신규 의존성 추가 시 Harness §4.5 체크리스트(표준 라이브러리 대체 가능성, 유지보수 상태,
+# 라이선스, 알려진 취약점, 크기)를 통과해야 하며 본 파일을 반드시 함께 갱신한다.
+
+# --- Web / API -------------------------------------------------------------
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+python-multipart==0.0.32          # multipart 업로드 파싱 (FastAPI 요구)
+jinja2==3.1.6                     # 서버 사이드 템플릿. autoescape 로 Harness §13 대응
+
+# --- Config / Validation ---------------------------------------------------
+pydantic==2.13.5
+pydantic-settings==2.15.0
+
+# --- Persistence -----------------------------------------------------------
+SQLAlchemy==2.0.52                # Harness §12: ORM/Parameterized Query 강제
+alembic==1.19.1                   # Harness §12: Migration 을 통한 Schema 변경
+psycopg[binary]==3.3.5
+
+# --- Queue -----------------------------------------------------------------
+celery==5.6.3
+redis==8.1.0
+
+# --- Security --------------------------------------------------------------
+# passlib 는 2020년 이후 릴리스가 없어 Harness §4.5(유지보수 상태) 기준 미달이므로
+# pyca 가 유지보수하는 bcrypt 를 직접 사용한다.
+bcrypt==5.0.0
+itsdangerous==2.2.0               # 세션 쿠키 서명 (Secret 은 환경변수에서 주입)
+
+# --- STT Core --------------------------------------------------------------
+# 모델/device/compute_type 등 실행 파라미터는 코드가 아니라 설정으로 관리한다 (Harness §5.2).
+# av(PyAV) 가 함께 설치되므로 별도 ffmpeg 바이너리 없이 디코딩이 가능하다.
+faster-whisper==1.2.1

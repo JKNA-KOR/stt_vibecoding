@@ -1,0 +1,29 @@
+# Harness §9: .env 는 절대 커밋하지 않는다.
+.env
+.env.*
+!.env.example
+
+# Harness §8/§57: 음성 원본과 Transcript 는 Confidential 이므로 저장소에 들어가지 않는다.
+/data/
+/models/
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.webm
+!tests/golden/assets/**/*.wav
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 로그는 stdout 으로 내보내는 것이 기본이나, 로컬 파일 출력 시에도 커밋하지 않는다.
+*.log
+/logs/

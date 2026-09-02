@@ -1,0 +1,8 @@
+# 개발/테스트 전용 의존성. 운영 이미지에는 포함하지 않는다.
+-r requirements.txt
+
+pytest==8.4.2
+pytest-asyncio==1.3.0
+httpx==0.28.1                     # FastAPI TestClient 백엔드
+ruff==0.14.5
+pip-audit==2.9.0                  # Harness §40: 알려진 취약점 점검

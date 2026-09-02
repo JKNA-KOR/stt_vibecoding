@@ -1,0 +1,75 @@
+"""Audit 이벤트 타입 (Harness §17 / §32).
+
+Harness §17 이 열거한 이벤트를 누락 없이 정의한다. 신규 이벤트가 필요하면
+이 Enum 에 추가하고 요구사항 문서의 AUD-020 표를 함께 갱신한다.
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+
+
+class AuditEventType(StrEnum):
+    # --- 인증 ---
+    LOGIN_SUCCESS = "LOGIN_SUCCESS"
+    LOGIN_FAILED = "LOGIN_FAILED"
+    LOGOUT = "LOGOUT"
+    ACCESS_DENIED = "ACCESS_DENIED"
+
+    # --- STT 처리 ---
+    STT_JOB_CREATED = "STT_JOB_CREATED"
+    AUDIO_UPLOADED = "AUDIO_UPLOADED"
+    STT_JOB_STARTED = "STT_JOB_STARTED"
+    STT_JOB_COMPLETED = "STT_JOB_COMPLETED"
+    STT_JOB_FAILED = "STT_JOB_FAILED"
+    STT_JOB_CANCELLED = "STT_JOB_CANCELLED"
+    TRANSCRIPT_VIEWED = "TRANSCRIPT_VIEWED"
+    TRANSCRIPT_DOWNLOADED = "TRANSCRIPT_DOWNLOADED"
+    AUDIO_DOWNLOADED = "AUDIO_DOWNLOADED"
+    AUDIO_DELETED = "AUDIO_DELETED"
+    TRANSCRIPT_DELETED = "TRANSCRIPT_DELETED"
+
+    # --- 관리자 ---
+    USER_ROLE_CHANGED = "USER_ROLE_CHANGED"
+    USER_CREATED = "USER_CREATED"
+    SYSTEM_CONFIG_CHANGED = "SYSTEM_CONFIG_CHANGED"
+    MODEL_CONFIG_CHANGED = "MODEL_CONFIG_CHANGED"
+    MODEL_CHANGED = "MODEL_CHANGED"
+    RETENTION_POLICY_CHANGED = "RETENTION_POLICY_CHANGED"
+    AUDIT_LOG_VIEWED = "AUDIT_LOG_VIEWED"
+    AUDIT_LOG_EXPORTED = "AUDIT_LOG_EXPORTED"
+
+    # --- Export / 대량 처리 (Harness §43) ---
+    BULK_EXPORT_STARTED = "BULK_EXPORT_STARTED"
+    BULK_EXPORT_COMPLETED = "BULK_EXPORT_COMPLETED"
+    BULK_DELETE_EXECUTED = "BULK_DELETE_EXECUTED"
+
+    # --- 보관정책 자동 처리 (Harness §21: 사용자 삭제와 구분) ---
+    RETENTION_AUDIO_PURGED = "RETENTION_AUDIO_PURGED"
+    RETENTION_TRANSCRIPT_PURGED = "RETENTION_TRANSCRIPT_PURGED"
+
+
+class AuditResult(StrEnum):
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+    DENIED = "DENIED"
+
+
+# Harness §32: 보안 모니터링 대상. Alert 파이프라인이 이 집합을 구독한다.
+SECURITY_MONITORED_EVENTS: frozenset[AuditEventType] = frozenset(
+    {
+        AuditEventType.LOGIN_FAILED,
+        AuditEventType.ACCESS_DENIED,
+        AuditEventType.USER_ROLE_CHANGED,
+        AuditEventType.MODEL_CONFIG_CHANGED,
+        AuditEventType.MODEL_CHANGED,
+        AuditEventType.RETENTION_POLICY_CHANGED,
+        AuditEventType.AUDIT_LOG_EXPORTED,
+        AuditEventType.BULK_EXPORT_STARTED,
+        AuditEventType.BULK_DELETE_EXECUTED,
+    }
+)
+
+# 시스템(스케줄러/워커)이 주체인 이벤트에 사용할 고정 actor 식별자.
+SYSTEM_ACTOR_ID = "SYSTEM"
+SYSTEM_ACTOR_ROLE = "SYSTEM"
