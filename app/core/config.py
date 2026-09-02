@@ -98,6 +98,9 @@ class Settings(BaseSettings):
     # --- 저장소 -------------------------------------------------------------
     database_url: str = "postgresql+psycopg://stt_app:stt_app@127.0.0.1:5432/stt"
     redis_url: str = "redis://127.0.0.1:6379/0"
+    # Harness §2.2 / NFR-004: 큐 백엔드는 교체 가능하다. inline 은 브로커 없이 호출 스레드에서
+    # 즉시 실행하므로 테스트·로컬 전용이며, 아래 검증이 운영 환경에서의 선택을 막는다.
+    queue_backend: Literal["celery", "inline"] = "celery"
     storage_root: Path = Path("./data")
     temp_dir: Path = Path("./data/tmp")
 
@@ -230,6 +233,12 @@ class Settings(BaseSettings):
                 raise ConfigurationError(
                     "prod 환경에서 CORS 와일드카드는 허용되지 않는다 (Harness §11)"
                 )
+
+        if self.is_production and self.queue_backend != "celery":
+            # Inline 큐는 업로드 요청을 전사 완료까지 블로킹한다 (Harness §24).
+            raise ConfigurationError(
+                "prod 환경에서 QUEUE_BACKEND='inline' 은 허용되지 않는다 (Harness §24)"
+            )
 
         if self.temp_file_max_age_hours <= 0:
             raise ConfigurationError("임시파일 무기한 보관은 허용되지 않는다 (Harness §21)")

@@ -37,11 +37,29 @@ from app.storage.database import Base
 from app.stt.schemas import TranscriptKind
 
 # PostgreSQL 에서는 JSONB, 테스트용 SQLite 에서는 JSON 으로 동작하도록 variant 를 쓴다.
-JsonType = JSON().with_variant(JSONB(), "postgresql")
+# none_as_null: 값이 없을 때 JSON 리터럴 'null' 이 아니라 SQL NULL 을 저장해야
+# `IS NULL` 조회가 기대대로 동작한다.
+JsonType = JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
+
+# SQLite 는 "INTEGER PRIMARY KEY" 만 rowid 별칭으로 취급하므로 BIGINT PK 에는 자동증가가
+# 걸리지 않는다. 운영 DB(PostgreSQL)는 BIGINT 를 그대로 쓰고 테스트 방언에서만 좁힌다.
+AutoPkType = BigInteger().with_variant(Integer, "sqlite")
 
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def ensure_utc(value: datetime | None) -> datetime | None:
+    """DB 에서 읽은 시각을 UTC aware 로 맞춘다.
+
+    PostgreSQL 의 timestamptz 는 tz 를 보존하지만 SQLite 방언은 naive 로 돌려준다.
+    저장하는 값은 항상 `utcnow()` 이므로 naive 값에 UTC 를 붙이는 것이 안전하며,
+    이렇게 해 두지 않으면 naive/aware 혼합 연산이 런타임에 터진다.
+    """
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=UTC)
 
 
 def new_job_id() -> str:
@@ -215,7 +233,7 @@ class AuditEvent(Base):
 
     __tablename__ = "audit_event"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(AutoPkType, primary_key=True, autoincrement=True)
     event_time: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, index=True
     )
@@ -273,7 +291,7 @@ class ConfigChange(Base):
 
     __tablename__ = "config_change"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(AutoPkType, primary_key=True, autoincrement=True)
     changed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, index=True
     )
