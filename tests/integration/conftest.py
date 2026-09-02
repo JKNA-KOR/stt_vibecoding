@@ -1,25 +1,34 @@
-"""Job 파이프라인 통합 테스트용 픽스처.
+"""통합 테스트용 픽스처.
 
 실제 브로커·모델 없이 업로드 → Job → 전사 → Transcript 저장 전 경로를 돌린다
 (NFR-003 / NFR-004). DB 는 파일 기반 SQLite 를 쓴다 — 워커 경로가 `session_scope()` 로
 새 세션을 여러 번 열기 때문에, 연결마다 사라지는 in-memory DB 로는 검증할 수 없다.
+
+스키마는 `Base.metadata.create_all` 이 아니라 **Alembic 마이그레이션**으로 만든다.
+그래야 audit_event 의 append-only 트리거(Harness §19)가 테스트에서도 걸리고, 모델과
+마이그레이션이 어긋나면 테스트가 먼저 깨진다. 마이그레이션은 세션당 한 번만 돌리고
+결과 파일을 테스트마다 복사한다.
 """
 
 from __future__ import annotations
 
+import os
+import shutil
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
 
 from app.auth.principal import Principal
 from app.auth.roles import UserRole
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.jobs.queue import InlineJobQueue
 from app.jobs.service import JobService
 from app.jobs.worker import execute_job
 from app.storage.audio import AudioStore
-from app.storage.database import Base, init_engine, reset_engine_for_tests, session_scope
+from app.storage.database import init_engine, reset_engine_for_tests, session_scope
 from app.storage.models import User
 from app.storage.transcript import TranscriptStore
 from app.stt.factory import reset_engine
@@ -43,12 +52,43 @@ def settings(tmp_path: Path) -> Settings:
     )
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture(scope="session")
+def migrated_template_db(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """마이그레이션을 한 번만 돌려 만든 템플릿 DB.
+
+    `migrations/env.py` 는 `DATABASE_URL` 을 읽으므로 환경변수를 잠시 바꾼 뒤 되돌린다.
+    `get_settings` 는 캐시되어 있어 앞뒤로 비워 주어야 한다.
+    """
+    template = tmp_path_factory.mktemp("schema") / "template.db"
+    previous = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///{template}"
+    get_settings.cache_clear()
+    try:
+        config = Config(str(PROJECT_ROOT / "alembic.ini"))
+        config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
+        command.upgrade(config, "head")
+    finally:
+        if previous is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous
+        get_settings.cache_clear()
+    return template
+
+
 @pytest.fixture
-def database(settings: Settings) -> Iterator[None]:
+def database(settings: Settings, migrated_template_db: Path) -> Iterator[None]:
     reset_engine_for_tests()
     reset_engine()
-    engine = init_engine(settings)
-    Base.metadata.create_all(engine)
+
+    target = Path(settings.database_url.split("///", 1)[1])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(migrated_template_db, target)
+
+    init_engine(settings)
     yield
     reset_engine_for_tests()
     reset_engine()

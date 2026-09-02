@@ -142,7 +142,18 @@ class AuditService:
         _assert_metadata_is_safe(metadata)
 
         ctx = current_context()
+        # 해시 체인을 INSERT 한 번으로 완성한다. 예전처럼 flush 후 prev_hash 를 채우면
+        # audit_event 에 UPDATE 가 나가는데, 이 테이블은 append-only 이고 DB 트리거가
+        # UPDATE 를 거부한다 (Harness §19, migrations 참조).
+        #
+        # event_time 도 컬럼 default 에 맡기지 않고 여기서 정한다. flush 시점에 채워지면
+        # 해시 계산 시점에 값이 없어 체인이 성립하지 않는다.
+        event_time = datetime.now(UTC)
+        prev_hash = self._latest_hash()
+
         event = AuditEvent(
+            event_time=event_time,
+            prev_hash=prev_hash,
             event_type=event_type,
             actor_id=actor.id,
             actor_role=actor.role,
@@ -160,13 +171,8 @@ class AuditService:
             stt_config_version=stt_config_version,
             metadata_json=metadata or None,
         )
-        # id 와 event_time 은 flush 시점에 확정된다. 해시는 그 값들까지 포함해야 하므로
-        # 한 번 flush 한 뒤 해시를 계산하고 다시 flush 한다.
+        event.record_hash = _compute_record_hash(event, prev_hash)
         self._session.add(event)
-        self._session.flush()
-
-        event.prev_hash = self._latest_hash(exclude_id=event.id)
-        event.record_hash = _compute_record_hash(event, event.prev_hash)
         self._session.flush()
 
         logger.info(
@@ -180,13 +186,12 @@ class AuditService:
         )
         return event
 
-    def _latest_hash(self, *, exclude_id: int) -> str:
-        stmt = (
-            select(AuditEvent.record_hash)
-            .where(AuditEvent.id < exclude_id)
-            .order_by(AuditEvent.id.desc())
-            .limit(1)
-        )
+    def _latest_hash(self) -> str:
+        """직전 레코드의 해시. 첫 레코드면 빈 문자열.
+
+        같은 트랜잭션에서 앞서 기록한 이벤트는 flush 되어 있으므로 여기서 보인다.
+        """
+        stmt = select(AuditEvent.record_hash).order_by(AuditEvent.id.desc()).limit(1)
         return self._session.execute(stmt).scalar_one_or_none() or ""
 
 
