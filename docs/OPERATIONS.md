@@ -289,6 +289,86 @@ sudo snap set ollama host=0.0.0.0   # 그 뒤 재시작
 
 ---
 
+## 4.3 JSON 연동 (외부 시스템 통합)
+
+multipart 를 쓰기 어려운 클라이언트(레거시 ESB, 일부 RPA)를 위한 입출력 경로다.
+
+### 입력 — `POST /api/v1/jobs/json`
+
+```json
+{
+  "filename": "call_20260902.wav",
+  "content_type": "audio/wav",
+  "audio_base64": "UklGRi...",
+  "idempotency_key": "CRM-12345",
+  "language": "ko"
+}
+```
+
+응답은 접수 결과다. 전사는 비동기이므로 `status` 는 `QUEUED` 로 시작한다.
+
+```json
+{
+  "job_id": "stt-...", "status": "QUEUED", "analysis_status": "NONE",
+  "original_filename": "call_20260902.wav",
+  "audio_duration_seconds": 30.32, "audio_size_bytes": 970284,
+  "audio_sha256": "36af160e..."
+}
+```
+
+`audio_sha256` 로 보낸 파일이 그대로 도착했는지 확인할 수 있다. `idempotency_key` 를
+주면 같은 키로 두 번 보내도 Job 이 하나만 생긴다.
+
+**검증은 multipart 와 같은 코드를 지난다.** 확장자 allowlist, 파일 시그니처, 크기,
+재생시간 — 입구가 둘이어도 규칙이 갈라지면 약한 쪽이 우회로가 된다 (Harness §6).
+
+크기 상한이 두 겹이다.
+- `JSON_UPLOAD_MAX_MB` — **디코딩된 원본** 기준. 디코딩 도중 넘기면 즉시 중단한다.
+- 요청 본문 자체 — base64 여유분(약 1.4배)까지. `Content-Length` 로 **읽기 전에**
+  거절한다. JSON 은 파싱 시점에 전체가 메모리에 올라오므로 라우트에서는 이미 늦다.
+  크기를 알 수 없는 chunked 요청은 411 로 거절한다.
+
+기본값은 **꺼짐**이다 (`ENABLE_JSON_UPLOAD=false`).
+
+### 출력 — `GET /api/v1/jobs/{id}/export`
+
+Job · Transcript · 분석을 한 문서로 내보낸다.
+
+```json
+{
+  "schema_version": "1.0",
+  "exported_at": "2026-09-02T...",
+  "job": { "id": "...", "engine": "faster-whisper", "model_name": "tiny",
+           "stt_config_version": "...", "audio_sha256": "...", ... },
+  "transcript": { "kind": "NORMALIZED", "text": "...", "segments": [...] },
+  "analysis": { "summary": [...], "keywords": [...], ... }
+}
+```
+
+| 파라미터 | 기본값 | 설명 |
+|---|---|---|
+| `include_transcript` | `JSON_EXPORT_INCLUDE_TRANSCRIPT` | Transcript 포함 |
+| `include_segments` | `JSON_EXPORT_INCLUDE_SEGMENTS` | 세그먼트 포함 (빼도 `text` 는 남는다) |
+| `include_analysis` | `JSON_EXPORT_INCLUDE_ANALYSIS` | 분석 포함 |
+| `kind` | `NORMALIZED` | `RAW` / `NORMALIZED` |
+
+**요청하지 않았거나 아직 만들어지지 않은 구성요소는 키 자체가 빠진다.** `null` 로
+채우지 않는 이유는, 소비하는 쪽이 "요청하지 않음"과 "값이 없음"을 구분할 수 있어야
+하기 때문이다.
+
+`job` 에는 재현에 필요한 정보가 모두 담긴다 — 엔진·모델·설정 버전·전처리/정규화 버전·
+음성 해시 (Harness §20). 저장 경로는 담기지 않는다 (§44).
+
+`schema_version` 은 형식이 바뀌면 올린다. 소비하는 쪽이 변화를 감지할 수 있게 한다.
+
+### 권한과 감사
+
+내보내기는 Transcript 본문을 포함하므로 **다운로드 권한**을 요구하고 감사에도
+다운로드(`TRANSCRIPT_DOWNLOADED`, `action=export_json`)로 기록된다 — 화면 조회와
+파일 반출은 다른 행위다 (Harness §43). AUDITOR 는 내보낼 수 없다.
+
+---
+
 ## 5. 일상 운영
 
 ### 5.1 상태 확인
@@ -429,6 +509,7 @@ with session_scope() as session:
 | 워커 메모리 (`tiny` 적재) | 527 MB 실측 | 2026-09-02 |
 | LLM 분석 (Ollama gemma3:4b) | 98초 통화 → 요약·키워드·분류 생성 | 2026-09-02 |
 | 런타임 프롬프트 변경 | 저장·복원·이력 기록 확인 | 2026-09-02 |
+| JSON 업로드 / 내보내기 | 실제 스택에서 전 경로 확인 | 2026-09-02 |
 | 사용자 역할 변경 | 감사 기록·자기강등 차단 확인 | 2026-09-02 |
 | **`small` 이상 모델** | **미검증** — `tiny` 만 확인 | — |
 | **컨테이너에서 LLM 접근** | **미검증** — 호스트 Ollama 가 127.0.0.1 바인딩 | — |

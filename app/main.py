@@ -20,7 +20,15 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
 
-from app.api.routes import admin, analysis, auth, health, jobs, transcripts
+from app.api.routes import (
+    admin,
+    analysis,
+    auth,
+    exports,
+    health,
+    jobs,
+    transcripts,
+)
 from app.core.config import Settings, get_settings
 from app.core.context import (
     mask_ip,
@@ -112,6 +120,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(jobs.router, prefix=API_PREFIX)
     app.include_router(transcripts.router, prefix=API_PREFIX)
     app.include_router(analysis.router, prefix=API_PREFIX)
+    app.include_router(exports.router, prefix=API_PREFIX)
     app.include_router(admin.router, prefix=API_PREFIX)
 
     # 화면과 정적 자산. CSP 가 'self' 만 허용하므로 CSS/JS 는 반드시 같은 출처에서 온다.
@@ -123,6 +132,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(web_routes.router)
     return app
+
+
+# base64 는 원본보다 약 33% 커진다. 여유를 두고 상한을 잡되, 디코딩된 크기 상한은
+# 서비스 계층이 따로 적용한다 (JSON_UPLOAD_MAX_MB).
+_BASE64_OVERHEAD = 1.4
+
+# 본문 크기 검사를 건너뛰는 경로. multipart 업로드는 스트리밍으로 처리되며 자체
+# 상한(STT_MAX_UPLOAD_MB)을 갖는다.
+_MULTIPART_PREFIX = "multipart/form-data"
+
+
+def _body_limit_bytes(request: Request, settings: Settings) -> int | None:
+    """이 요청에 적용할 본문 상한. None 이면 검사하지 않는다."""
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith(_MULTIPART_PREFIX):
+        # 스트리밍으로 읽으며 저장 계층이 크기를 검사한다.
+        return None
+    if request.url.path.endswith("/jobs/json"):
+        return int(settings.json_upload_max_mb * 1024 * 1024 * _BASE64_OVERHEAD)
+    return settings.json_body_max_kb * 1024
 
 
 def _register_middleware(app: FastAPI) -> None:
@@ -140,12 +169,76 @@ def _register_middleware(app: FastAPI) -> None:
         set_actor(None, None)
         set_source_ip_masked(mask_ip(request.client.host if request.client else None))
 
+        oversized = _reject_if_oversized(request, app.state.settings, request_id)
+        if oversized is not None:
+            return oversized
+
         response = await call_next(request)
 
         response.headers[REQUEST_ID_HEADER] = request_id
         for header, value in SECURITY_HEADERS.items():
             response.headers.setdefault(header, value)
         return response
+
+
+def _reject_if_oversized(
+    request: Request, settings: Settings, request_id: str
+) -> JSONResponse | None:
+    """본문이 상한을 넘으면 읽기 전에 거절한다 (Harness §24).
+
+    JSON 본문은 파싱 시점에 전체가 메모리에 올라오므로, 라우트에서 검사하면 이미 늦다.
+    `Content-Length` 가 없는 요청(chunked)도 크기를 미리 알 수 없어 거절한다 — 상한을
+    강제할 수 없는 경로를 열어 두면 상한이 없는 것과 같다.
+    """
+    if request.method not in ("POST", "PUT", "PATCH"):
+        return None
+
+    limit = _body_limit_bytes(request, settings)
+    if limit is None:
+        return None
+
+    raw_length = request.headers.get("content-length")
+    if raw_length is None:
+        if request.headers.get("transfer-encoding", "").lower() == "chunked":
+            logger.warning(
+                "rejected request without a declared body size",
+                extra={"event": "BODY_SIZE_UNKNOWN", "path": request.url.path},
+            )
+            return _error_response(
+                code=ErrorCode.VALIDATION_ERROR,
+                message="요청 본문 크기를 확인할 수 없습니다.",
+                status_code=411,
+                request_id=request_id,
+            )
+        return None
+
+    try:
+        length = int(raw_length)
+    except ValueError:
+        return _error_response(
+            code=ErrorCode.VALIDATION_ERROR,
+            message="요청 값이 올바르지 않습니다.",
+            status_code=400,
+            request_id=request_id,
+        )
+
+    if length > limit:
+        logger.warning(
+            "rejected oversized request body",
+            extra={
+                "event": "BODY_TOO_LARGE",
+                "path": request.url.path,
+                "content_length": length,
+                "limit_bytes": limit,
+            },
+        )
+        return _error_response(
+            code=ErrorCode.FILE_TOO_LARGE,
+            message="요청 본문이 허용된 크기를 초과했습니다.",
+            status_code=413,
+            request_id=request_id,
+        )
+    return None
 
 
 def _register_error_handlers(app: FastAPI) -> None:

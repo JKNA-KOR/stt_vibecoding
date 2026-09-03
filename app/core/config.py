@@ -156,6 +156,23 @@ class Settings(BaseSettings):
     # 범위 밖이고 분석만 구현되어 있다.
     enable_llm_analysis: bool = False
 
+    # --- JSON 연동 (외부 시스템 통합용) ---
+    #
+    # multipart 를 쓰기 어려운 클라이언트(레거시 ESB, 일부 RPA 등)를 위한 경로다.
+    # base64 는 원본보다 약 33% 커지므로 multipart 보다 낮은 상한을 따로 둔다.
+    # 검증(확장자·시그니처·크기·재생시간)은 multipart 경로와 **같은 코드**를 지난다 —
+    # 입구가 둘이어도 규칙이 갈라지면 약한 쪽이 우회로가 된다 (Harness §6).
+    enable_json_upload: bool = False
+    json_upload_max_mb: Annotated[int, Field(ge=1, le=200)] = 50
+    # 업로드를 제외한 일반 JSON 요청 본문 상한. 메모리 고갈을 막는다 (Harness §24).
+    json_body_max_kb: Annotated[int, Field(ge=16, le=8192)] = 512
+
+    enable_json_export: bool = True
+    # 내보내기 기본값. 요청 파라미터로 덮어쓸 수 있다.
+    json_export_include_transcript: bool = True
+    json_export_include_segments: bool = True
+    json_export_include_analysis: bool = True
+
     # 접속 정보는 전부 설정에서 온다. 새 LLM 을 붙이는 데 코드 변경이 필요 없다 (§5.2).
     #   ollama            : Ollama 고유 API (/api/chat)
     #   openai-compatible : OpenAI 형식 /chat/completions 를 말하는 모든 엔드포인트

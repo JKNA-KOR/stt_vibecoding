@@ -30,6 +30,9 @@ class JobResponse(BaseModel):
     original_filename: str
     audio_duration_seconds: float | None
     audio_size_bytes: int
+    # 업로더가 보낸 파일이 그대로 도착했는지 확인할 수 있게 한다. 자기 파일의 해시이며
+    # 민감정보가 아니다. JSON 연동 응답과 같은 값이다.
+    audio_sha256: str
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
