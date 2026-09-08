@@ -20,6 +20,7 @@ from app.core.config import Settings
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.logging import get_logger
 from app.core.runtime_config import RuntimeConfigService
+from app.glossary.service import GlossaryService
 from app.jobs.state import JobStatus
 from app.llm.analyzer import TranscriptAnalyzer
 from app.llm.factory import create_provider
@@ -175,6 +176,9 @@ class AnalysisService:
             create_provider(self._settings),
             settings=self._settings,
             prompt_template=self._config.get(ANALYSIS_PROMPT_KEY),
+            glossary=GlossaryService(
+                self._session, settings=self._settings
+            ).prompt_appendix(),
         )
         outcome = analyzer.analyze(segments)
 

@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from datetime import datetime
 
 from sqlalchemy import Select, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.jobs.state import JobStatus
 from app.storage.models import IdempotencyRecord, Job, Transcript, User
@@ -86,7 +86,8 @@ class JobRepository:
         `owner_id` 가 None 이면 전체를 대상으로 한다. 전체 조회 가능 여부는 호출부가
         권한으로 판단하며, 이 계층은 필터를 그대로 적용한다.
         """
-        stmt = select(Job)
+        # QA 요약을 함께 읽는다. 없으면 목록 한 줄마다 별도 질의가 나간다 (N+1).
+        stmt = select(Job).options(selectinload(Job.qa_evaluations))
         stmt = self._apply_filters(stmt, owner_id=owner_id, status=status)
 
         count_stmt = select(func.count()).select_from(

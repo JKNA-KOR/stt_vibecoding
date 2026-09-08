@@ -8,6 +8,18 @@ const detail = {
   jobId: null,
   canDownload: false,
   timer: null,
+  // 캡션 재생은 결과가 처음 도착했을 때 한 번만 돈다.
+  captionPlayed: false,
+};
+
+/** 메뉴에 붙는 분석 상태 요약. 상태 코드를 그대로 보여주면 읽기 어렵다. */
+const ANALYSIS_LABELS = {
+  NONE: "미요청",
+  QUEUED: "대기",
+  PROCESSING: "분석중",
+  COMPLETED: "완료",
+  FAILED: "실패",
+  SKIPPED: "생략",
 };
 
 const FACT_LABELS = [
@@ -28,7 +40,16 @@ const FACT_LABELS = [
   ["error_code", "오류 코드"],
   ["analysis_status", "분석 상태"],
   ["analysis_error_code", "분석 오류"],
+  ["qa_status", "QA 상태"],
+  ["qa_error_code", "QA 오류"],
 ];
+
+/** 결과가 있는 카드와 "아직 없음" 안내를 함께 토글한다. 둘 다 같은 메뉴 안에 있다. */
+function setCardVisible(cardId, placeholderId, visible) {
+  document.getElementById(cardId).hidden = !visible;
+  const placeholder = document.getElementById(placeholderId);
+  if (placeholder) placeholder.hidden = visible;
+}
 
 function formatFact(key, job) {
   const value = job[key];
@@ -140,6 +161,16 @@ function renderSegments(payload) {
   if (payload.segments.length === 0) {
     list.appendChild(el("li", null, "인식된 발화가 없습니다."));
   }
+
+  const count = document.getElementById("menu-segment-count");
+  if (count) count.textContent = `${payload.segments.length}건`;
+
+  // 전사가 막 끝난 결과는 한 번만 한 줄씩 흘려 보여준다. 폴링으로 매번 다시 그려질 때마다
+  // 재생하면 읽는 중에 화면이 계속 튄다.
+  if (!detail.captionPlayed && captionsAllowed()) {
+    detail.captionPlayed = true;
+    playCaptions(list);
+  }
 }
 
 function updateDownloadLinks(kind) {
@@ -162,11 +193,11 @@ async function loadTranscript() {
     );
     renderSegments(payload);
     updateDownloadLinks(kind);
-    document.getElementById("transcript-card").hidden = false;
+    setCardVisible("transcript-card", "transcript-empty", true);
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
       // 아직 결과가 없거나 삭제된 경우다. 오류로 시끄럽게 알릴 일은 아니다.
-      document.getElementById("transcript-card").hidden = true;
+      setCardVisible("transcript-card", "transcript-empty", false);
       return;
     }
     notifyError(error);
@@ -193,18 +224,28 @@ async function loadJob() {
     renderFacts(job);
     renderActions(job);
 
+    const analysisState = document.getElementById("menu-analysis-state");
+    if (analysisState) analysisState.textContent = ANALYSIS_LABELS[job.analysis_status] || "";
+
+    // 점수가 나오면 renderQA 가 이 자리를 점수로 덮어쓴다. 그 전까지는 상태를 보여준다.
+    const qaState = document.getElementById("menu-qa-score");
+    if (qaState && job.qa_status !== "COMPLETED") {
+      qaState.textContent = ANALYSIS_LABELS[job.qa_status] || "";
+    }
+
     if (job.status === "COMPLETED") {
       await loadTranscript();
       await loadLineage();
       await loadAnalysis();
-      // 분석은 전사보다 오래 걸린다. 끝날 때까지 상태를 계속 확인한다.
-      if (job.analysis_status === "QUEUED" || job.analysis_status === "PROCESSING") {
+      await loadQA();
+      // 분석과 QA 는 전사보다 오래 걸린다. 둘 중 하나라도 진행 중이면 계속 확인한다.
+      if (isPending(job.analysis_status) || isPending(job.qa_status)) {
         startPolling();
       } else {
         stopPolling();
       }
     } else {
-      document.getElementById("transcript-card").hidden = true;
+      setCardVisible("transcript-card", "transcript-empty", false);
       if (job.status === "QUEUED" || job.status === "PROCESSING") startPolling();
       else stopPolling();
     }
@@ -220,6 +261,10 @@ async function loadJob() {
   }
 }
 
+function isPending(status) {
+  return status === "QUEUED" || status === "PROCESSING";
+}
+
 function startPolling() {
   if (detail.timer !== null) return;
   detail.timer = window.setInterval(loadJob, 3000);
@@ -232,12 +277,34 @@ function stopPolling() {
   }
 }
 
+/** 상담 메뉴로 보는 대상을 바꾼다. 화면 이동이 아니므로 진행 중인 폴링이 끊기지 않는다. */
+function selectPane(paneId) {
+  for (const item of document.querySelectorAll("#consult-menu .menu-item")) {
+    item.classList.toggle("active", item.dataset.pane === paneId);
+  }
+  for (const pane of document.querySelectorAll(".pane")) {
+    pane.classList.toggle("active", pane.id === paneId);
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  for (const item of document.querySelectorAll("#consult-menu .menu-item")) {
+    item.addEventListener("click", () => selectPane(item.dataset.pane));
+  }
+
   const card = document.getElementById("job-card");
   detail.jobId = card.dataset.jobId;
   detail.canDownload = card.dataset.canDownload === "true";
 
-  document.getElementById("kind-select").addEventListener("change", loadTranscript);
+  document.getElementById("kind-select").addEventListener("change", () => {
+    // 종류를 바꾸면 다른 본문이다. 다시 한 번 흘려 보여준다.
+    detail.captionPlayed = false;
+    loadTranscript();
+  });
+
+  document.getElementById("caption-play").addEventListener("click", () => {
+    playCaptions(document.getElementById("segments"));
+  });
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) stopPolling();
   });
@@ -291,7 +358,7 @@ function renderAnalysis(payload) {
   warning.textContent = notes.join(" ");
   warning.hidden = notes.length === 0;
 
-  document.getElementById("analysis-card").hidden = false;
+  setCardVisible("analysis-card", "analysis-empty", true);
 }
 
 async function loadAnalysis() {
@@ -300,7 +367,7 @@ async function loadAnalysis() {
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
       // 아직 분석하지 않았거나 기능이 꺼져 있다. 오류로 알릴 일은 아니다.
-      document.getElementById("analysis-card").hidden = true;
+      setCardVisible("analysis-card", "analysis-empty", false);
       return;
     }
     notifyError(error);
@@ -323,4 +390,183 @@ async function requestAnalysis() {
 
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("reanalyze-button").addEventListener("click", requestAnalysis);
+});
+
+/* --- QA 평가 ---------------------------------------------------------------
+ *
+ * 평가 결과도 LLM 이 만들어 낸 텍스트다. 특히 위반의 근거 발화는 녹취 원문의 인용이므로
+ * Transcript 와 똑같이 다룬다 — 예외 없이 textContent 다 (Harness §13).
+ */
+
+const QA_GRADE_CLASS = {
+  "우수": "excellent",
+  "양호": "good",
+  "보통": "fair",
+  "미흡": "poor",
+};
+
+const QA_SEVERITY_CLASS = {
+  "심각": "critical",
+  "주의": "major",
+  "경미": "minor",
+};
+
+function renderQAItems(items) {
+  const box = document.getElementById("qa-items");
+  box.replaceChildren();
+
+  if (items.length === 0) {
+    box.appendChild(el("p", "hint", "항목별 점수가 없습니다."));
+    return;
+  }
+
+  for (const item of items) {
+    const row = el("div", "bar-row");
+    row.appendChild(el("span", "bar-label", item.category));
+
+    const track = el("div", "bar-track");
+    const ratio = item.max_score > 0 ? item.score / item.max_score : 0;
+    const fill = el("div", "bar-fill");
+    // 폭은 10% 단위 클래스로만 준다. CSP 가 인라인 style 을 막는다.
+    fill.className = "bar-fill " + ratioClass(ratio) + " w" + Math.round(ratio * 10) * 10;
+    track.appendChild(fill);
+    row.appendChild(track);
+
+    row.appendChild(el("span", "bar-value", `${item.score} / ${item.max_score}`));
+    box.appendChild(row);
+
+    if (item.comment) {
+      box.appendChild(el("p", "bar-comment", item.comment));
+    }
+  }
+}
+
+function ratioClass(ratio) {
+  if (ratio >= 0.9) return "grade-excellent";
+  if (ratio >= 0.8) return "grade-good";
+  if (ratio >= 0.7) return "grade-fair";
+  return "grade-poor";
+}
+
+function renderQAViolations(violations) {
+  const box = document.getElementById("qa-violations");
+  box.replaceChildren();
+
+  if (violations.length === 0) {
+    box.appendChild(el("p", "hint", "확인된 위반이 없습니다."));
+    return;
+  }
+
+  for (const violation of violations) {
+    const card = el("div", "violation violation-" + (QA_SEVERITY_CLASS[violation.severity] || "minor"));
+
+    const head = el("div", "violation-head");
+    head.appendChild(el("span", "violation-rule", violation.rule));
+    head.appendChild(
+      el("span", "severity severity-" + (QA_SEVERITY_CLASS[violation.severity] || "minor"),
+         violation.severity),
+    );
+    card.appendChild(head);
+
+    if (violation.comment) card.appendChild(el("p", "violation-comment", violation.comment));
+    // 근거 발화는 녹취 원문의 인용이다. 반드시 textContent 로만 넣는다.
+    card.appendChild(el("blockquote", "violation-evidence", violation.evidence));
+
+    box.appendChild(card);
+  }
+}
+
+function renderQANotes(payload) {
+  const dl = document.getElementById("qa-notes");
+  dl.replaceChildren();
+
+  for (const [label, items] of [["잘한 점", payload.strengths], ["개선할 점", payload.improvements]]) {
+    if (!items || items.length === 0) continue;
+    dl.appendChild(el("dt", null, label));
+    const dd = el("dd");
+    const ul = el("ul", "inline-list");
+    for (const item of items) ul.appendChild(el("li", null, item));
+    dd.appendChild(ul);
+    dl.appendChild(dd);
+  }
+}
+
+function renderQA(payload) {
+  document.getElementById("qa-overall").textContent = `${payload.overall_score}`;
+  document.getElementById("qa-compliance").textContent = `${payload.compliance_score}`;
+
+  const gradeSlot = document.getElementById("qa-grade-slot");
+  gradeSlot.replaceChildren();
+  gradeSlot.appendChild(
+    el("span", "grade grade-" + (QA_GRADE_CLASS[payload.grade] || "unknown"), payload.grade),
+  );
+
+  const criticalSlot = document.getElementById("qa-critical-slot");
+  criticalSlot.replaceChildren();
+  criticalSlot.appendChild(
+    payload.has_critical_violation
+      ? el("span", "grade grade-poor", `심각 위반 ${payload.violation_count}건`)
+      : el("span", "hint-inline", payload.violation_count > 0
+          ? `위반 ${payload.violation_count}건`
+          : "위반 없음"),
+  );
+
+  document.getElementById("qa-summary").textContent = payload.summary;
+  renderQAItems(payload.score_items);
+  renderQAViolations(payload.violations);
+  renderQANotes(payload);
+
+  // 어떤 모델과 기준으로 나온 점수인지 화면에도 드러낸다 (Harness §20).
+  document.getElementById("qa-meta").textContent =
+    `${payload.provider} / ${payload.model_name} / 기준 ${payload.rubric_version}`;
+
+  const warning = document.getElementById("qa-warning");
+  const notes = [];
+  if (payload.transcript_truncated) notes.push("입력이 길어 앞부분만 평가되었습니다.");
+  if (payload.warnings.length > 0) notes.push(`모델 응답 경고: ${payload.warnings.join(", ")}`);
+  warning.textContent = notes.join(" ");
+  warning.hidden = notes.length === 0;
+
+  const menuScore = document.getElementById("menu-qa-score");
+  if (menuScore) menuScore.textContent = `${payload.overall_score}점`;
+
+  setCardVisible("qa-card", "qa-empty", true);
+}
+
+async function loadQA() {
+  try {
+    renderQA(await request(`/jobs/${encodeURIComponent(detail.jobId)}/qa`));
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      // 아직 평가하지 않았거나 기능이 꺼져 있다. 오류로 알릴 일은 아니다.
+      setCardVisible("qa-card", "qa-empty", false);
+      return;
+    }
+    notifyError(error);
+  }
+}
+
+async function requestQA() {
+  const buttons = [
+    document.getElementById("evaluate-button"),
+    document.getElementById("reevaluate-button"),
+  ].filter(Boolean);
+  for (const button of buttons) button.disabled = true;
+
+  try {
+    await request(`/jobs/${encodeURIComponent(detail.jobId)}/qa`, { method: "POST" });
+    notify("QA 평가를 요청했습니다. 완료까지 시간이 걸릴 수 있습니다.", "success");
+    await loadJob();
+  } catch (error) {
+    notifyError(error);
+  } finally {
+    for (const button of buttons) button.disabled = false;
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  for (const id of ["evaluate-button", "reevaluate-button"]) {
+    const button = document.getElementById(id);
+    if (button) button.addEventListener("click", requestQA);
+  }
 });

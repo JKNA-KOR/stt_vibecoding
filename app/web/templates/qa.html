@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ui %}
+{% set page_icon = "shield" %}
+{% block title %}QA 개요 · STT 서비스{% endblock %}
+{% block page_title %}QA 개요{% endblock %}
+{% block page_subtitle %}상담 원칙과 컴플라이언스 기준으로 매긴 품질 지표{% endblock %}
+
+{% block topbar_tools %}
+<button type="button" id="qa-refresh">{{ ui.icon("refresh") }} 새로고침</button>
+{% endblock %}
+
+{% block content %}
+<section class="stat-row">
+  <div class="stat-box tone-indigo">
+    <span class="stat-icon">{{ ui.icon("layers") }}</span>
+    <div>
+      <div class="stat-label">평가한 상담</div>
+      <div class="stat-value" id="qa-count">-</div>
+    </div>
+  </div>
+  <div class="stat-box tone-blue">
+    <span class="stat-icon">{{ ui.icon("gauge") }}</span>
+    <div>
+      <div class="stat-label">평균 상담 점수</div>
+      <div class="stat-value" id="qa-avg-score">-</div>
+    </div>
+  </div>
+  <div class="stat-box tone-green">
+    <span class="stat-icon">{{ ui.icon("shield") }}</span>
+    <div>
+      <div class="stat-label">평균 컴플라이언스</div>
+      <div class="stat-value" id="qa-avg-compliance">-</div>
+    </div>
+  </div>
+  <div class="stat-box tone-red">
+    <span class="stat-icon">{{ ui.icon("alert") }}</span>
+    <div>
+      <div class="stat-label">심각 위반 상담</div>
+      <div class="stat-value" id="qa-critical">-</div>
+    </div>
+  </div>
+</section>
+
+<div class="split">
+  <section class="panel">
+    <div class="panel-head">
+      <h2 class="panel-title">{{ ui.icon("trend") }} 등급 분포</h2>
+      <a class="back-link" href="/qa/scores">상담 점수 보기</a>
+    </div>
+    <div class="panel-body">
+      <div class="bar-chart" id="qa-grades"></div>
+      <p class="empty" id="qa-grades-empty" hidden>아직 평가된 상담이 없습니다.</p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2 class="panel-title">{{ ui.icon("alert") }} 위반 심각도</h2>
+      <a class="back-link" href="/qa/compliance">컴플라이언스 보기</a>
+    </div>
+    <div class="panel-body">
+      <div class="status-grid" id="qa-severity"></div>
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2 class="panel-title">{{ ui.icon("script") }} QA 는 이렇게 매겨집니다</h2>
+  </div>
+  <div class="panel-body">
+    <dl class="facts">
+      <dt>상담 점수</dt>
+      <dd>상담 원칙의 항목별 배점을 합산합니다. 총점은 모델이 아니라 서버가 다시 계산합니다.</dd>
+      <dt>컴플라이언스 점수</dt>
+      <dd>100점에서 시작해 위반 심각도만큼 뺍니다 (심각 30 · 주의 15 · 경미 5).</dd>
+      <dt>근거</dt>
+      <dd>위반은 녹취에서 인용한 발화가 있을 때만 기록됩니다. 근거 없는 감점은 남기지 않습니다.</dd>
+      <dt>기준 변경</dt>
+      <dd>상담 원칙과 컴플라이언스 기준은 관리 화면에서 바꿉니다. 변경 사유가 함께 기록됩니다.</dd>
+    </dl>
+    <p class="hint">
+      평가 결과는 AI 가 만든 참고 자료입니다. 인사 평가에 그대로 쓰기 전에 사람이 확인해야 합니다.
+    </p>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/qa.js"></script>
+{% endblock %}

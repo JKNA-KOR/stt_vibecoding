@@ -1,66 +1,187 @@
 {% extends "base.html" %}
-{% block title %}작업 목록 · STT 서비스{% endblock %}
+{% import "_icons.html" as ui %}
+{% set page_icon = "dashboard" %}
+{% block title %}상담 대시보드 · STT 서비스{% endblock %}
+{% block page_title %}상담 대시보드{% endblock %}
+{% block page_subtitle %}녹취를 올리고 변환·AI 분석 진행 상황을 한 화면에서 본다{% endblock %}
+
+{% block topbar_tools %}
+<button type="button" id="refresh-button">{{ ui.icon("refresh") }} 새로고침</button>
+{% endblock %}
 
 {% block content %}
-{% if can_upload %}
-<section class="card">
-  <h2>음성 업로드</h2>
-  <form id="upload-form">
-    <input type="file" id="audio-file" name="file"
-           accept=".wav,.mp3,.m4a,.flac,.ogg,.webm,.mp4" required>
-    <button type="submit" class="primary" id="upload-submit">업로드</button>
-  </form>
-  <p class="hint" id="upload-hint">
-    지원 형식: WAV, MP3, M4A, FLAC, OGG, WEBM, MP4
-  </p>
-  <div class="progress" id="upload-progress" hidden>
-    <div class="progress-bar" id="upload-progress-bar"></div>
-  </div>
-</section>
-{% endif %}
 
-<section class="card">
-  <div class="card-head">
-    <h2>작업 목록</h2>
-    <div class="controls">
-      <label for="status-filter" class="sr-only">상태 필터</label>
-      <select id="status-filter">
-        <option value="">전체 상태</option>
-        <option value="QUEUED">대기</option>
-        <option value="PROCESSING">처리중</option>
-        <option value="COMPLETED">완료</option>
-        <option value="FAILED">실패</option>
-        <option value="CANCELLED">취소</option>
-      </select>
-      <button type="button" id="refresh-button">새로고침</button>
-      <label class="checkbox">
-        <input type="checkbox" id="auto-refresh" checked> 자동 새로고침
-      </label>
+{# ---- 요약 상자. 값은 JS 가 textContent 로 채운다. ------------------------- #}
+<section class="stat-row">
+  <div class="stat-box tone-indigo">
+    <span class="stat-icon">{{ ui.icon("layers") }}</span>
+    <div>
+      <div class="stat-label">전체 상담</div>
+      <div class="stat-value" id="stat-total">-</div>
     </div>
   </div>
-
-  <table class="table">
-    <thead>
-      <tr>
-        <th>파일명</th>
-        <th>상태</th>
-        <th>길이</th>
-        <th>생성 시각</th>
-        <th>RTF</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody id="jobs-body"></tbody>
-  </table>
-
-  <p class="empty" id="jobs-empty" hidden>작업이 없습니다.</p>
-
-  <div class="pager">
-    <button type="button" id="prev-page" disabled>이전</button>
-    <span id="page-info"></span>
-    <button type="button" id="next-page" disabled>다음</button>
+  <div class="stat-box tone-amber">
+    <span class="stat-icon">{{ ui.icon("clock") }}</span>
+    <div>
+      <div class="stat-label">대기</div>
+      <div class="stat-value" id="stat-QUEUED">-</div>
+    </div>
+  </div>
+  <div class="stat-box tone-blue">
+    <span class="stat-icon">{{ ui.icon("activity") }}</span>
+    <div>
+      <div class="stat-label">처리중</div>
+      <div class="stat-value" id="stat-PROCESSING">-</div>
+    </div>
+  </div>
+  <div class="stat-box tone-green">
+    <span class="stat-icon">{{ ui.icon("check") }}</span>
+    <div>
+      <div class="stat-label">완료</div>
+      <div class="stat-value" id="stat-COMPLETED">-</div>
+    </div>
+  </div>
+  <div class="stat-box tone-red">
+    <span class="stat-icon">{{ ui.icon("alert") }}</span>
+    <div>
+      <div class="stat-label">실패</div>
+      <div class="stat-value" id="stat-FAILED">-</div>
+    </div>
   </div>
 </section>
+
+<div class="split">
+
+  {# ---- 상담 목록 프레임 -------------------------------------------------- #}
+  <section class="panel" id="jobs-panel">
+    <div class="panel-head">
+      <h2 class="panel-title">{{ ui.icon("list") }} 상담 목록</h2>
+      <div class="controls">
+        <label for="status-filter" class="sr-only">상태 필터</label>
+        <select id="status-filter">
+          <option value="">전체 상태</option>
+          <option value="QUEUED">대기</option>
+          <option value="PROCESSING">처리중</option>
+          <option value="COMPLETED">완료</option>
+          <option value="FAILED">실패</option>
+          <option value="CANCELLED">취소</option>
+        </select>
+        <label class="checkbox">
+          <input type="checkbox" id="auto-refresh" checked> 자동 새로고침
+        </label>
+      </div>
+    </div>
+
+    <div class="table-frame">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>파일명</th>
+            <th>상태</th>
+            <th>길이</th>
+            <th>생성 시각</th>
+            {# 확신도는 모델이 스스로 매긴 값이다. 제목에서부터 "추정"으로 밝힌다. #}
+            <th title="모델이 스스로 매긴 확신도입니다. 측정된 정확도가 아닙니다.">변환 정확도(추정)</th>
+            <th>QA 점수</th>
+            <th>컴플라이언스 위반</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="jobs-body"></tbody>
+      </table>
+    </div>
+
+    <p class="empty" id="jobs-empty" hidden>상담 기록이 없습니다.</p>
+
+    <div class="panel-foot">
+      <div class="pager">
+        <button type="button" id="prev-page" disabled>이전</button>
+        <span id="page-info"></span>
+        <button type="button" id="next-page" disabled>다음</button>
+      </div>
+    </div>
+  </section>
+
+  {# ---- 우측 보조 프레임 -------------------------------------------------- #}
+  <div>
+    {% if can_upload %}
+    <section class="panel" id="upload-panel">
+      <div class="panel-head">
+        <h2 class="panel-title">{{ ui.icon("upload") }} 녹취 업로드</h2>
+      </div>
+      <div class="panel-body">
+        <form id="upload-form">
+          <label for="audio-file">음성 파일</label>
+          <input type="file" id="audio-file" name="file"
+                 accept=".wav,.mp3,.m4a,.flac,.ogg,.webm,.mp4" required>
+          <button type="submit" class="primary" id="upload-submit">
+            {{ ui.icon("upload") }} 업로드
+          </button>
+        </form>
+        <p class="hint" id="upload-hint">
+          지원 형식: WAV, MP3, M4A, FLAC, OGG, WEBM, MP4
+        </p>
+        <div class="progress" id="upload-progress" hidden>
+          <div class="progress-bar" id="upload-progress-bar"></div>
+        </div>
+      </div>
+    </section>
+    {% endif %}
+
+    {# QA 요약. 값은 /qa/stats 에서 오며 JS 가 textContent 로 채운다. #}
+    <section class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">{{ ui.icon("shield") }} QA 요약</h2>
+        <a class="back-link" href="/qa">자세히</a>
+      </div>
+      <div class="panel-body">
+        <div class="status-grid">
+          <div class="stat">
+            <div class="stat-label">평균 상담 점수</div>
+            <div class="stat-value" id="dash-qa-score">-</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">평균 컴플라이언스</div>
+            <div class="stat-value" id="dash-qa-compliance">-</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">평가한 상담</div>
+            <div class="stat-value" id="dash-qa-count">-</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">심각 위반</div>
+            <div class="stat-value" id="dash-qa-critical">-</div>
+          </div>
+        </div>
+        <div class="bar-chart" id="dash-qa-grades"></div>
+        <p class="hint" id="dash-qa-hint" hidden>
+          아직 평가된 상담이 없습니다. 상담 상세에서 QA 평가를 실행할 수 있습니다.
+        </p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">{{ ui.icon("sparkles") }} 처리 흐름</h2>
+      </div>
+      <div class="panel-body">
+        <dl class="facts">
+          <dt>1. 업로드</dt>
+          <dd>형식·크기·재생시간을 검사한 뒤 대기열에 넣는다</dd>
+          <dt>2. 음성 변환</dt>
+          <dd>워커가 STT 엔진으로 전사하고 정규화 결과를 함께 남긴다</dd>
+          <dt>3. AI 분석</dt>
+          <dd>요약·키워드·상담 분류를 만든다. 원본 전사는 바뀌지 않는다</dd>
+          <dt>4. QA 평가</dt>
+          <dd>상담 원칙과 컴플라이언스 기준으로 채점한다. 점수는 서버가 다시 계산한다</dd>
+        </dl>
+        <p class="hint">
+          파일명을 누르면 상담 상세에서 스크립트와 AI 분석을 볼 수 있습니다.
+        </p>
+      </div>
+    </section>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}

@@ -194,13 +194,18 @@ def sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
 
 # Transcript 는 Untrusted Data 이므로(Harness §13) 인라인 스크립트를 허용하지 않는 CSP 를 적용해
 # 저장형 XSS 의 실행 경로를 한 번 더 막는다. 프론트엔드는 외부 JS 파일만 사용한다.
+# 마이크는 기본적으로 잠가 둔다. 실시간 STT 를 켤 때만 이 출처에 열린다 —
+# 기능이 꺼져 있는데 마이크 권한이 열려 있을 이유가 없다 (Harness §11 / §54).
+_MICROPHONE_BLOCKED = "microphone=()"
+_MICROPHONE_SELF = "microphone=(self)"
+
 SECURITY_HEADERS: dict[str, str] = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-origin",
-    "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+    "Permissions-Policy": f"geolocation=(), {_MICROPHONE_BLOCKED}, camera=()",
     "Cache-Control": "no-store",
     "Content-Security-Policy": (
         "default-src 'self'; "
@@ -215,3 +220,18 @@ SECURITY_HEADERS: dict[str, str] = {
         "frame-ancestors 'none'"
     ),
 }
+
+
+def security_headers(*, allow_microphone: bool) -> dict[str, str]:
+    """설정에 맞춘 응답 헤더.
+
+    바뀌는 것은 마이크 하나뿐이다. 실시간 STT 가 꺼져 있으면 `microphone=()` 로 두어
+    화면 코드가 실수로 `getUserMedia` 를 부르더라도 브라우저가 막는다 — 기능 플래그가
+    꺼졌는데 권한만 열려 있는 상태를 만들지 않는다 (Harness §54).
+    """
+    headers = dict(SECURITY_HEADERS)
+    if allow_microphone:
+        headers["Permissions-Policy"] = headers["Permissions-Policy"].replace(
+            _MICROPHONE_BLOCKED, _MICROPHONE_SELF
+        )
+    return headers

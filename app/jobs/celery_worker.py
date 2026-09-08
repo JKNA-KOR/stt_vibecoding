@@ -16,11 +16,12 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.jobs.queue import (
     ANALYSIS_TASK_NAME,
+    QA_TASK_NAME,
     STT_QUEUE_NAME,
     STT_TASK_NAME,
     create_celery_app,
 )
-from app.jobs.worker import execute_analysis, execute_job
+from app.jobs.worker import execute_analysis, execute_job, execute_qa
 from app.storage.database import init_engine
 
 settings = get_settings()
@@ -50,3 +51,13 @@ def run_analysis_job(job_id: str) -> None:
     되면 큐를 분리하고 워커를 따로 띄운다.
     """
     execute_analysis(job_id)
+
+
+@celery_app.task(name=QA_TASK_NAME, queue=STT_QUEUE_NAME, ignore_result=True)
+def run_qa_job(job_id: str) -> None:
+    """전사가 끝난 Job 에 상담 품질 평가를 수행한다.
+
+    분석과 별개의 태스크로 둔다. 루브릭이 바뀌어 재평가할 때 요약까지 다시 뽑을 이유가
+    없고, 둘 중 하나가 실패해도 다른 하나는 남아야 하기 때문이다 (Harness §4.3).
+    """
+    execute_qa(job_id)

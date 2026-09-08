@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ui %}
+{% set page_icon = "mic" %}
+{% block title %}실시간 전사 · STT 서비스{% endblock %}
+{% block page_title %}실시간 전사{% endblock %}
+{% block page_subtitle %}통화 중인 음성을 조각 단위로 전사해 바로 보여준다{% endblock %}
+
+{% block content %}
+{# 기능이 꺼져 있으면 왜 못 쓰는지 보여준다. 화면을 숨기면 설정 문제인지 알 수 없다. #}
+<section class="panel" id="realtime-root"
+         data-enabled="{{ 'true' if realtime_enabled else 'false' }}">
+  <div class="panel-head">
+    <h2 class="panel-title">{{ ui.icon("mic") }} 마이크</h2>
+    <div class="controls">
+      <span class="status" id="rt-state">대기</span>
+      <span class="hint-inline" id="rt-timer">00:00</span>
+      <button type="button" class="primary" id="rt-start">{{ ui.icon("mic") }} 시작</button>
+      <button type="button" id="rt-stop" disabled>중지</button>
+    </div>
+  </div>
+  <div class="panel-body">
+    {% if realtime_enabled %}
+    <p class="hint" id="rt-hint">
+      시작을 누르면 브라우저가 마이크 권한을 묻습니다. 음성은 조각 단위로 전사되며,
+      서버에 저장되지 않습니다.
+    </p>
+    <div class="level-meter"><div class="level-bar" id="rt-level"></div></div>
+    {% else %}
+    <p class="empty">
+      실시간 전사가 꺼져 있습니다. 관리자가 ENABLE_REALTIME_STT 를 켜야 사용할 수 있습니다.
+    </p>
+    {% endif %}
+  </div>
+</section>
+
+{% if realtime_enabled %}
+<div class="split">
+  <section class="panel">
+    <div class="panel-head">
+      <h2 class="panel-title">{{ ui.icon("script") }} 전사 결과</h2>
+      <div class="controls">
+        <span class="hint-inline" id="rt-count"></span>
+        <button type="button" id="rt-download" disabled>텍스트 저장</button>
+        <button type="button" id="rt-clear" disabled>지우기</button>
+      </div>
+    </div>
+    <div class="panel-body">
+      {# 전사 본문은 JS 가 textContent 로만 넣는다. Untrusted Data 다 (§13). #}
+      <ol class="segments" id="rt-segments"></ol>
+      <p class="empty" id="rt-placeholder">아직 전사된 내용이 없습니다.</p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2 class="panel-title">{{ ui.icon("alert") }} 알아둘 점</h2>
+    </div>
+    <div class="panel-body">
+      <dl class="facts">
+        <dt>준실시간입니다</dt>
+        <dd>일정 길이로 잘라 전사하므로 조각 경계에서 문맥이 끊깁니다. 문장이 잘릴 수 있습니다.</dd>
+        <dt>저장되지 않습니다</dt>
+        <dd>음성과 전사 결과 모두 서버에 남지 않습니다. 필요하면 텍스트로 내려받으세요.</dd>
+        <dt>AI 분석·QA 대상이 아닙니다</dt>
+        <dd>요약과 품질 평가는 업로드한 상담에만 적용됩니다.</dd>
+        <dt>정확도</dt>
+        <dd>짧은 조각은 배경 잡음에 취약합니다. 기록이 필요한 상담은 녹취 업로드를 쓰세요.</dd>
+      </dl>
+    </div>
+  </section>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/realtime.js"></script>
+{% endblock %}

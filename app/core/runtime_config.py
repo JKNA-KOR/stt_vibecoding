@@ -26,18 +26,31 @@ from app.core.config import AUDITED_CONFIG_KEYS, Settings
 from app.core.exceptions import ValidationError
 from app.core.logging import get_logger
 from app.llm.prompts import ANALYSIS_PROMPT_KEY, DEFAULT_ANALYSIS_PROMPT
+from app.qa.rubrics import (
+    DEFAULT_COMPLIANCE,
+    DEFAULT_RUBRIC,
+    QA_COMPLIANCE_KEY,
+    QA_RUBRIC_KEY,
+)
 from app.storage.models import ConfigChange, RuntimeConfig
 
 logger = get_logger(__name__)
 
 # 값이 길어 별도로 다루는 키. 감사에는 길이와 해시만 남기고 본문은 남기지 않는다.
-_PROMPT_KEYS: frozenset[str] = frozenset({ANALYSIS_PROMPT_KEY})
+# QA 기준도 여기에 든다 — 본문이 길고, 무엇을 어떻게 바꿨는지는 값이 아니라 사유로 남는다.
+_PROMPT_KEYS: frozenset[str] = frozenset(
+    {ANALYSIS_PROMPT_KEY, QA_RUBRIC_KEY, QA_COMPLIANCE_KEY}
+)
 
 # 런타임에 바꿀 수 있는 키 전체. 여기 없는 키는 API 가 거부한다.
 EDITABLE_KEYS: frozenset[str] = AUDITED_CONFIG_KEYS | _PROMPT_KEYS
 
 # 코드에 두는 기본값. DB 에 값이 없으면 이것이 쓰인다.
-_DEFAULTS: dict[str, str] = {ANALYSIS_PROMPT_KEY: DEFAULT_ANALYSIS_PROMPT}
+_DEFAULTS: dict[str, str] = {
+    ANALYSIS_PROMPT_KEY: DEFAULT_ANALYSIS_PROMPT,
+    QA_RUBRIC_KEY: DEFAULT_RUBRIC,
+    QA_COMPLIANCE_KEY: DEFAULT_COMPLIANCE,
+}
 
 _MAX_VALUE_CHARS = 20000
 

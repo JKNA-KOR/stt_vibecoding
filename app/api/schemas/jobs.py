@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.api.schemas.common import PageMeta
 from app.jobs.state import JobStatus
 from app.llm.state import AnalysisStatus
+from app.qa.state import QAStatus
 from app.stt.schemas import TranscriptKind
 
 
@@ -43,6 +44,10 @@ class JobResponse(BaseModel):
     analysis_status: AnalysisStatus
     analysis_error_code: str | None
 
+    # QA 도 마찬가지다. 점수가 없는 이유가 "안 돌렸다"인지 "실패했다"인지 구분되어야 한다.
+    qa_status: QAStatus
+    qa_error_code: str | None
+
     # 결과 재현에 필요한 정보 (Harness §20). 모델 아티팩트 해시까지는 노출하지 않는다.
     engine: str
     model_name: str
@@ -53,6 +58,16 @@ class JobResponse(BaseModel):
     queue_wait_seconds: float | None
     processing_duration_seconds: float | None
     real_time_factor: float | None
+    # 모델이 스스로 매긴 평균 확신도(0~1). 측정된 정확도가 아니다 (Harness §20).
+    transcription_confidence: float | None
+
+    # --- 목록 화면용 QA 요약 ---
+    # 평가가 없으면 전부 None 이다. 0 으로 내려 쓰면 "0점"으로 오해된다 (Harness §4.3).
+    qa_overall_score: float | None
+    qa_grade: str | None
+    qa_compliance_score: float | None
+    qa_violation_count: int | None
+    qa_has_critical_violation: bool
 
     audio_deleted_at: datetime | None
 

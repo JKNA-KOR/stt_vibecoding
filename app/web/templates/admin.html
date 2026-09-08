@@ -1,85 +1,153 @@
 {% extends "base.html" %}
-{% block title %}관리 · STT 서비스{% endblock %}
+{% import "_icons.html" as ui %}
+{% set page_icon = "settings" %}
+{% block title %}시스템 관리 · STT 서비스{% endblock %}
+{% block page_title %}시스템 관리{% endblock %}
+{% block page_subtitle %}엔진 상태, 분석 프롬프트, 사용자, 감사 기록을 한 곳에서 관리한다{% endblock %}
 
 {% block content %}
-<section class="card" id="admin-root"
+
+{# 권한 판단은 서버가 한다. 화면은 쓸 수 없는 프레임을 그리지 않을 뿐이다 (SEC-010). #}
+<section class="panel" id="admin-root"
          data-can-admin="{{ 'true' if can_admin else 'false' }}"
          data-can-audit="{{ 'true' if can_audit else 'false' }}">
-  <h2>시스템 상태</h2>
-  {% if can_admin %}
-  <div class="status-grid" id="status-grid"></div>
-  <h3>작업 상태 분포</h3>
-  <div class="status-grid" id="job-counts"></div>
-  {% else %}
-  <p class="hint">감사 로그 조회 권한만 있습니다. 업무 데이터와 시스템 설정은 표시되지 않습니다.</p>
-  {% endif %}
+  <div class="panel-head">
+    <h2 class="panel-title">{{ ui.icon("activity") }} 시스템 상태</h2>
+  </div>
+  <div class="panel-body">
+    {% if can_admin %}
+    <div class="status-grid" id="status-grid"></div>
+    <h3 class="panel-title">{{ ui.icon("layers") }} 작업 상태 분포</h3>
+    <div class="status-grid" id="job-counts"></div>
+    {% else %}
+    <p class="hint">
+      감사 로그 조회 권한만 있습니다. 업무 데이터와 시스템 설정은 표시되지 않습니다.
+    </p>
+    {% endif %}
+  </div>
 </section>
 
 {% if can_admin %}
-<section class="card">
-  <div class="card-head">
-    <h2>분석 프롬프트</h2>
+<section class="panel">
+  <div class="panel-head">
+    <h2 class="panel-title">{{ ui.icon("sparkles") }} 분석 프롬프트</h2>
     <div class="controls">
       <button type="button" id="prompt-save">저장</button>
       <button type="button" id="prompt-reset">기본값 복원</button>
     </div>
   </div>
-  <p class="hint">
-    변경하면 다음 분석부터 즉시 반영됩니다. 결과 해석이 달라지므로 변경 사유가 함께 기록됩니다.
-  </p>
-  <label for="prompt-text">프롬프트</label>
-  <textarea id="prompt-text" rows="12" spellcheck="false"></textarea>
-  <label for="prompt-reason">변경 사유</label>
-  <input type="text" id="prompt-reason" maxlength="500" placeholder="예: 요약 품질 개선">
+  <div class="panel-body">
+    <p class="hint">
+      변경하면 다음 분석부터 즉시 반영됩니다. 결과 해석이 달라지므로 변경 사유가 함께 기록됩니다.
+    </p>
+    <label for="prompt-text">프롬프트</label>
+    <textarea id="prompt-text" rows="12" spellcheck="false"></textarea>
+    <label for="prompt-reason">변경 사유</label>
+    <input type="text" id="prompt-reason" maxlength="500" placeholder="예: 요약 품질 개선">
+  </div>
 </section>
 
-<section class="card">
-  <h2>사용자</h2>
-  <table class="table">
-    <thead>
-      <tr><th>아이디</th><th>역할</th><th>상태</th><th>인증</th><th></th></tr>
-    </thead>
-    <tbody id="users-body"></tbody>
-  </table>
+{# QA 기준 편집. 프롬프트 편집과 같은 경로(런타임 설정)를 쓰므로 변경 사유가 함께 남는다. #}
+<section class="panel" id="qa-rubric-panel">
+  <div class="panel-head">
+    <h2 class="panel-title">{{ ui.icon("shield") }} QA 기준</h2>
+    <div class="controls">
+      <label for="rubric-profile" class="sr-only">기본 원칙 묶음</label>
+      <select id="rubric-profile"></select>
+      <button type="button" id="rubric-load">기본값 불러오기</button>
+      <button type="button" id="rubric-save">저장</button>
+      <button type="button" id="rubric-reset">기본값 복원</button>
+    </div>
+  </div>
+  <div class="panel-body">
+    <p class="hint" id="rubric-profile-hint"></p>
+    <p class="hint">
+      불러오기는 아래 편집기를 채울 뿐이며 저장하지 않습니다. 저장해야 다음 평가부터 반영됩니다.
+      기준이 바뀌면 점수도 달라지므로, 이전 점수와 비교할 때는 평가 결과에 함께 기록된
+      기준 해시를 확인해야 합니다.
+    </p>
+
+    <div class="split">
+      <div>
+        <label for="rubric-text">상담 원칙 (채점 기준)</label>
+        <textarea id="rubric-text" rows="18" spellcheck="false"></textarea>
+        <label for="rubric-file" class="file-label">파일로 덮어쓰기 (.md / .txt)</label>
+        <input type="file" id="rubric-file" accept=".md,.txt,text/plain,text/markdown">
+      </div>
+      <div>
+        <label for="compliance-text">컴플라이언스 기준 (금지 행위)</label>
+        <textarea id="compliance-text" rows="18" spellcheck="false"></textarea>
+        <label for="compliance-file" class="file-label">파일로 덮어쓰기 (.md / .txt)</label>
+        <input type="file" id="compliance-file" accept=".md,.txt,text/plain,text/markdown">
+      </div>
+    </div>
+
+    <label for="rubric-reason">변경 사유</label>
+    <input type="text" id="rubric-reason" maxlength="500" placeholder="예: 2026년 상담 품질 규정 반영">
+  </div>
 </section>
 
-<section class="card">
-  <h2>설정 변경 이력</h2>
-  <table class="table">
-    <thead>
-      <tr><th>시각</th><th>키</th><th>변경자</th><th>사유</th></tr>
-    </thead>
-    <tbody id="config-history-body"></tbody>
-  </table>
-</section>
+<div class="split">
+  <section class="panel">
+    <div class="panel-head">
+      <h2 class="panel-title">{{ ui.icon("user") }} 사용자</h2>
+    </div>
+    <div class="table-frame">
+      <table class="table">
+        <thead>
+          <tr><th>아이디</th><th>역할</th><th>상태</th><th>인증</th><th></th></tr>
+        </thead>
+        <tbody id="users-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2 class="panel-title">{{ ui.icon("clock") }} 설정 변경 이력</h2>
+    </div>
+    <div class="table-frame">
+      <table class="table">
+        <thead>
+          <tr><th>시각</th><th>키</th><th>변경자</th><th>사유</th></tr>
+        </thead>
+        <tbody id="config-history-body"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
 {% endif %}
 
 {% if can_audit %}
-<section class="card">
-  <div class="card-head">
-    <h2>감사 로그</h2>
+<section class="panel" id="audit-panel">
+  <div class="panel-head">
+    <h2 class="panel-title">{{ ui.icon("shield") }} 감사 로그</h2>
     <div class="controls">
       <label for="event-filter" class="sr-only">이벤트 종류</label>
       <input type="text" id="event-filter" placeholder="이벤트 종류 (예: LOGIN_FAILED)"
              maxlength="64">
       <button type="button" id="audit-refresh">조회</button>
-      <button type="button" id="verify-chain">무결성 검증</button>
+      <button type="button" id="verify-chain">{{ ui.icon("shield") }} 무결성 검증</button>
     </div>
   </div>
-  <p class="hint" id="chain-result"></p>
-  <table class="table">
-    <thead>
-      <tr>
-        <th>시각</th>
-        <th>이벤트</th>
-        <th>주체</th>
-        <th>동작</th>
-        <th>결과</th>
-        <th>대상</th>
-      </tr>
-    </thead>
-    <tbody id="audit-body"></tbody>
-  </table>
+  <div class="panel-body">
+    <p class="hint" id="chain-result"></p>
+  </div>
+  <div class="table-frame">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>시각</th>
+          <th>이벤트</th>
+          <th>주체</th>
+          <th>동작</th>
+          <th>결과</th>
+          <th>대상</th>
+        </tr>
+      </thead>
+      <tbody id="audit-body"></tbody>
+    </table>
+  </div>
   <p class="empty" id="audit-empty" hidden>기록이 없습니다.</p>
 </section>
 {% endif %}

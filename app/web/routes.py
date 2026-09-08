@@ -86,6 +86,100 @@ def job_detail_page(
     )
 
 
+@router.get("/consultations", response_class=HTMLResponse, response_model=None)
+def consultations_page(
+    request: Request, principal: Principal | None = Depends(optional_principal)
+) -> HTMLResponse | RedirectResponse:
+    """상담 목록 화면.
+
+    작업 목록(`/`)과 나누어 둔 이유는 보는 목적이 다르기 때문이다. 목록 화면은 "전사가
+    잘 돌았는가"를 보고, 이 화면은 "무슨 말이 오갔는가"를 본다 — 그래서 여기서는 변환된
+    스크립트를 곧바로 펼쳐 준다.
+    """
+    if principal is None:
+        return _redirect_to_login(request)
+    return templates.TemplateResponse(
+        request, "consultations.html", {"page": "consultations", **_view_context(principal)}
+    )
+
+
+@router.get("/realtime", response_class=HTMLResponse, response_model=None)
+def realtime_page(
+    request: Request, principal: Principal | None = Depends(optional_principal)
+) -> HTMLResponse | RedirectResponse:
+    """실시간 전사 화면.
+
+    기능이 꺼져 있어도 화면은 연다. 화면이 사라지는 것보다 "왜 쓸 수 없는지"를 보여주는
+    편이 낫다 — 설정이 꺼진 것과 화면이 없는 것을 사용자가 구분할 수 있어야 한다.
+    """
+    if principal is None:
+        return _redirect_to_login(request)
+
+    from app.core.config import get_settings
+
+    return templates.TemplateResponse(
+        request,
+        "realtime.html",
+        {
+            "page": "realtime",
+            "realtime_enabled": get_settings().enable_realtime_stt,
+            **_view_context(principal),
+        },
+    )
+
+
+@router.get("/glossary", response_class=HTMLResponse, response_model=None)
+def glossary_page(
+    request: Request, principal: Principal | None = Depends(optional_principal)
+) -> HTMLResponse | RedirectResponse:
+    """용어사전 화면.
+
+    읽기는 누구나 할 수 있고 편집은 관리자만 할 수 있다. 화면은 편집 도구를 권한에 따라
+    감추지만, 실제 판단은 API 가 다시 한다 (SEC-010).
+    """
+    if principal is None:
+        return _redirect_to_login(request)
+    return templates.TemplateResponse(
+        request, "glossary.html", {"page": "glossary", **_view_context(principal)}
+    )
+
+
+@router.get("/qa", response_class=HTMLResponse, response_model=None)
+def qa_page(
+    request: Request, principal: Principal | None = Depends(optional_principal)
+) -> HTMLResponse | RedirectResponse:
+    """QA 개요. 평균 점수와 등급 분포를 본다."""
+    if principal is None:
+        return _redirect_to_login(request)
+    return templates.TemplateResponse(
+        request, "qa.html", {"page": "qa", **_view_context(principal)}
+    )
+
+
+@router.get("/qa/scores", response_class=HTMLResponse, response_model=None)
+def qa_scores_page(
+    request: Request, principal: Principal | None = Depends(optional_principal)
+) -> HTMLResponse | RedirectResponse:
+    """상담 점수 목록."""
+    if principal is None:
+        return _redirect_to_login(request)
+    return templates.TemplateResponse(
+        request, "qa_scores.html", {"page": "qa_scores", **_view_context(principal)}
+    )
+
+
+@router.get("/qa/compliance", response_class=HTMLResponse, response_model=None)
+def qa_compliance_page(
+    request: Request, principal: Principal | None = Depends(optional_principal)
+) -> HTMLResponse | RedirectResponse:
+    """컴플라이언스 점수 목록. 위반이 있는 상담만 모아 본다."""
+    if principal is None:
+        return _redirect_to_login(request)
+    return templates.TemplateResponse(
+        request, "qa_compliance.html", {"page": "qa_compliance", **_view_context(principal)}
+    )
+
+
 @router.get("/admin", response_class=HTMLResponse, response_model=None)
 def admin_page(
     request: Request, principal: Principal | None = Depends(optional_principal)

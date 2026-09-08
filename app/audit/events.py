@@ -29,6 +29,13 @@ class AuditEventType(StrEnum):
     AUDIO_DELETED = "AUDIO_DELETED"
     TRANSCRIPT_DELETED = "TRANSCRIPT_DELETED"
 
+    # --- 상담 품질 평가 (QA) ---
+    # 평가 결과가 상담원 인사 자료로 쓰일 수 있다. 누가 언제 무엇을 평가했고 누가
+    # 열어 봤는지가 남아야 한다 (Harness §17 / §46).
+    QA_EVALUATED = "QA_EVALUATED"
+    QA_EVALUATION_FAILED = "QA_EVALUATION_FAILED"
+    QA_RESULT_VIEWED = "QA_RESULT_VIEWED"
+
     # --- 관리자 ---
     USER_ROLE_CHANGED = "USER_ROLE_CHANGED"
     USER_CREATED = "USER_CREATED"

@@ -29,6 +29,7 @@ from app.core.exceptions import NotFoundError, ValidationError
 from app.core.runtime_config import EDITABLE_KEYS, RuntimeConfigService
 from app.jobs.queue import create_queue
 from app.jobs.state import JobStatus
+from app.qa.rubrics import PROFILES
 from app.storage.models import AuditEvent, ConfigChange, Job, User
 from app.stt.factory import get_engine
 
@@ -135,6 +136,32 @@ def list_config(
     """런타임에 바꿀 수 있는 설정 목록. 긴 값(프롬프트)은 잘려서 온다."""
     entries = RuntimeConfigService(session, settings=settings).list_all()
     return {"items": [asdict(entry) for entry in entries]}
+
+
+@router.get("/qa/rubric-profiles")
+def qa_rubric_profiles(
+    principal: Annotated[Principal, Depends(require_permission(Permission.ADMIN_MANAGE))],
+) -> dict[str, object]:
+    """코드에 실린 기본 상담원칙 묶음 (FR-M-004).
+
+    관리 화면이 "기본값 불러오기"로 편집기를 채우는 데 쓴다. 여기서 곧바로 저장하지
+    않는 이유는, 기준을 바꾸는 일에는 사유가 함께 남아야 하기 때문이다 (Harness §37) —
+    불러오기는 편집기를 채울 뿐이고 저장은 기존 설정 경로를 그대로 지난다.
+
+    관리자 전용이다. 평가 기준 전문은 일반 사용자 응답에 실릴 이유가 없다 (§44).
+    """
+    return {
+        "items": [
+            {
+                "key": key,
+                "label": profile["label"],
+                "description": profile["description"],
+                "rubric": profile["rubric"],
+                "compliance": profile["compliance"],
+            }
+            for key, profile in PROFILES.items()
+        ]
+    }
 
 
 @router.get("/config/{key}")

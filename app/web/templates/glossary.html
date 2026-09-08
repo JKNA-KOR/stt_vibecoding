@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ui %}
+{% set page_icon = "book" %}
+{% block title %}용어사전 · STT 서비스{% endblock %}
+{% block page_title %}금융권 용어사전{% endblock %}
+{% block page_subtitle %}등록한 용어가 전사 힌트와 AI 분석·QA 해석에 함께 쓰인다{% endblock %}
+
+{% block topbar_tools %}
+<button type="button" id="glossary-refresh">{{ ui.icon("refresh") }} 새로고침</button>
+{% endblock %}
+
+{% block content %}
+<div class="split" id="glossary-root" data-can-admin="{{ 'true' if can_admin else 'false' }}">
+
+  {# ---- 용어 목록 -------------------------------------------------------- #}
+  <section class="panel">
+    <div class="panel-head">
+      <h2 class="panel-title">{{ ui.icon("book") }} 등록된 용어</h2>
+      <div class="controls">
+        <label for="glossary-search" class="sr-only">용어 검색</label>
+        <input type="text" id="glossary-search" placeholder="용어 검색" maxlength="120">
+        <label for="glossary-category" class="sr-only">분류</label>
+        <select id="glossary-category"><option value="">전체 분류</option></select>
+        <span class="hint-inline" id="glossary-count"></span>
+      </div>
+    </div>
+
+    <div class="table-frame">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>용어</th>
+            <th>분류</th>
+            <th>뜻</th>
+            <th>오인식 표기</th>
+            <th>우선순위</th>
+            <th>상태</th>
+            {% if can_admin %}<th></th>{% endif %}
+          </tr>
+        </thead>
+        <tbody id="glossary-body"></tbody>
+      </table>
+    </div>
+
+    <p class="empty" id="glossary-empty" hidden>
+      등록된 용어가 없습니다. 기본 금융 용어를 불러오거나 직접 추가하세요.
+    </p>
+  </section>
+
+  {# ---- 우측: 추가 / 힌트 ------------------------------------------------- #}
+  <div>
+    {% if can_admin %}
+    <section class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">{{ ui.icon("sparkles") }} 용어 추가</h2>
+        <button type="button" id="glossary-seed">기본 용어 불러오기</button>
+      </div>
+      <div class="panel-body">
+        <form id="glossary-form">
+          <label for="term-name">용어</label>
+          <input type="text" id="term-name" maxlength="120" required
+                 placeholder="예: 중도상환수수료">
+
+          <label for="term-category">분류</label>
+          <input type="text" id="term-category" maxlength="40" placeholder="예: 여신">
+
+          <label for="term-definition">뜻</label>
+          <textarea id="term-definition" rows="3" maxlength="500"
+                    placeholder="AI 분석과 QA 가 이 뜻으로 해석합니다."></textarea>
+
+          <label for="term-aliases">오인식 표기 (쉼표로 구분)</label>
+          <input type="text" id="term-aliases" maxlength="400"
+                 placeholder="예: 중도 상환 수수료, 중도상황수수료">
+
+          <label for="term-priority">우선순위 (0~1000)</label>
+          <input type="text" id="term-priority" maxlength="4" value="50">
+
+          <button type="submit" class="primary" id="term-submit">추가</button>
+        </form>
+        <p class="hint">
+          우선순위가 높은 용어가 전사 힌트에 먼저 실립니다. 뜻은 분석·QA 프롬프트에 쓰입니다.
+        </p>
+      </div>
+    </section>
+    {% endif %}
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">{{ ui.icon("audio") }} 전사 힌트</h2>
+      </div>
+      <div class="panel-body">
+        <p class="hint">
+          아래 문자열이 전사 엔진에 그대로 넘어갑니다. 프롬프트 길이 상한이 있어
+          <strong>등록한 용어가 전부 실리지는 않습니다</strong>.
+        </p>
+        <div class="status-grid">
+          <div class="stat">
+            <div class="stat-label">힌트에 실린 용어</div>
+            <div class="stat-value" id="hint-included">-</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">사용 중인 용어</div>
+            <div class="stat-value" id="hint-active">-</div>
+          </div>
+        </div>
+        <label for="hint-text">엔진에 넘어가는 값</label>
+        <textarea id="hint-text" rows="6" readonly></textarea>
+        <p class="hint" id="hint-warning" hidden></p>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/glossary.js"></script>
+{% endblock %}

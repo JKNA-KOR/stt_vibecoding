@@ -1,24 +1,51 @@
 {% extends "base.html" %}
+{% import "_icons.html" as ui %}
 {% block title %}로그인 · STT 서비스{% endblock %}
 
-{% block content %}
-<section class="card card-narrow">
-  <h1>로그인</h1>
-  <form id="login-form" autocomplete="on">
-    <label for="username">아이디</label>
-    <input type="text" id="username" name="username" required autocomplete="username"
-           maxlength="150" autofocus>
+{# 로그인은 사이드바 셸을 쓰지 않는다. 아직 주체가 없으므로 메뉴도 없다. #}
+{% block anonymous %}
+<div class="auth-page">
+  <aside class="auth-aside">
+    <p class="brand-sub">Speech Analytics</p>
+    <h2>상담 녹취를<br>스크립트와 인사이트로</h2>
+    <p>업로드한 음성을 전사하고, 요약·키워드·상담 분류까지 한 흐름으로 정리합니다.</p>
+    <ul class="auth-points">
+      <li>{{ ui.icon("audio") }} 음성 변환과 정규화 결과를 함께 보관</li>
+      <li>{{ ui.icon("sparkles") }} 상담 요약·키워드·후속 조치 자동 정리</li>
+      <li>{{ ui.icon("shield") }} 모든 조회·삭제는 감사 기록으로 남습니다</li>
+    </ul>
+  </aside>
 
-    <label for="password">비밀번호</label>
-    <input type="password" id="password" name="password" required
-           autocomplete="current-password" maxlength="200">
+  <main class="auth-main">
+    <div class="auth-card">
+      <div class="auth-brand">
+        <span class="brand">JB STT</span>
+      </div>
+      <div class="panel">
+        <div class="panel-body">
+          <h1>로그인</h1>
+          <p class="hint">등록된 계정으로 접속합니다.</p>
 
-    <button type="submit" class="primary" id="login-submit">로그인</button>
-  </form>
-  <p class="hint">
-    로그인 실패가 반복되면 계정이 일시적으로 잠깁니다.
-  </p>
-</section>
+          <div id="notice" class="notice" hidden></div>
+
+          <form id="login-form" autocomplete="on">
+            <label for="username">아이디</label>
+            <input type="text" id="username" name="username" required autocomplete="username"
+                   maxlength="150" autofocus>
+
+            <label for="password">비밀번호</label>
+            <input type="password" id="password" name="password" required
+                   autocomplete="current-password" maxlength="200">
+
+            <button type="submit" class="primary" id="login-submit">로그인</button>
+          </form>
+
+          <p class="hint">로그인 실패가 반복되면 계정이 일시적으로 잠깁니다.</p>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
 {% endblock %}
 
 {% block scripts %}

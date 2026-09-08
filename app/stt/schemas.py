@@ -21,12 +21,19 @@ class TranscriptKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class TranscriptSegment:
-    """시작·종료 시각을 가진 텍스트 조각."""
+    """시작·종료 시각을 가진 텍스트 조각.
+
+    `confidence` 는 **모델이 스스로 매긴 확신도**이지 측정된 정확도가 아니다. Whisper 계열이
+    내는 평균 로그확률을 0~1 로 옮긴 값이며, 낮으면 의심해 볼 구간이라는 신호일 뿐이다.
+    이 값을 "정확도"라고 부르면 사람이 검증된 수치로 오해한다 — 화면에서도 "추정"으로
+    표기한다 (Harness §20 / §4.3). 값을 주지 않는 엔진에서는 `None` 이다.
+    """
 
     index: int
     start: float
     end: float
     text: str
+    confidence: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +44,13 @@ class STTOptions:
     beam_size: int
     vad_enabled: bool
     task: str = "transcribe"
+    # 도메인 용어를 모델에 힌트로 준다. Whisper 계열의 `initial_prompt` 에 해당하며,
+    # 사전에 등록된 용어를 인식 결과 쪽으로 끌어당긴다. 비어 있으면 보내지 않는다.
+    #
+    # **이것은 지시문이 아니라 어휘 힌트다.** Whisper 는 프롬프트를 명령으로 해석하지
+    # 않고 다음 토큰 예측의 문맥으로만 쓴다. 길이 상한이 있으므로(약 224 토큰) 호출부가
+    # 잘라서 넘긴다.
+    vocabulary_hint: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,3 +105,21 @@ class TranscriptionResult:
     @property
     def char_count(self) -> int:
         return sum(len(segment.text) for segment in self.segments)
+
+    @property
+    def mean_confidence(self) -> float | None:
+        """길이로 가중한 평균 확신도.
+
+        단순 평균을 쓰지 않는 이유는, 0.5초짜리 감탄사와 20초짜리 설명이 같은 무게를
+        가지면 전체 인상이 왜곡되기 때문이다. 값을 주는 세그먼트가 하나도 없으면
+        `None` 이다 — 0 으로 내려 쓰면 "확신도 0"으로 오해된다 (Harness §4.3).
+        """
+        weighted = 0.0
+        total = 0.0
+        for segment in self.segments:
+            if segment.confidence is None:
+                continue
+            span = max(segment.end - segment.start, 0.0) or 1.0
+            weighted += segment.confidence * span
+            total += span
+        return round(weighted / total, 4) if total > 0 else None

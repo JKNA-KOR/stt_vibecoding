@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ui %}
+{% set page_icon = "list" %}
+{% block title %}상담 목록 · STT 서비스{% endblock %}
+{% block page_title %}상담 목록{% endblock %}
+{% block page_subtitle %}변환된 상담 스크립트를 한 화면에서 읽는다{% endblock %}
+
+{% block topbar_tools %}
+<button type="button" id="consult-refresh">{{ ui.icon("refresh") }} 새로고침</button>
+{% endblock %}
+
+{% block content %}
+<div class="consult">
+
+  {# ---- 왼쪽: 상담 목록 프레임 -------------------------------------------- #}
+  <aside class="panel consult-list">
+    <div class="panel-head">
+      <h2 class="panel-title">{{ ui.icon("audio") }} 상담</h2>
+      <span class="hint-inline" id="consult-count"></span>
+    </div>
+    <div class="panel-body">
+      <label for="consult-search" class="sr-only">파일명 검색</label>
+      <input type="text" id="consult-search" placeholder="파일명으로 찾기" maxlength="120">
+    </div>
+    <div class="consult-items" id="consult-items"></div>
+    <p class="empty" id="consult-empty" hidden>전사가 끝난 상담이 없습니다.</p>
+    <div class="panel-foot">
+      <div class="pager">
+        <button type="button" id="consult-prev" disabled>이전</button>
+        <span id="consult-page"></span>
+        <button type="button" id="consult-next" disabled>다음</button>
+      </div>
+    </div>
+  </aside>
+
+  {# ---- 오른쪽: 스크립트 프레임 -------------------------------------------- #}
+  <div>
+    <section class="panel" id="script-panel"
+             data-can-download="{{ 'true' if can_download else 'false' }}">
+      <div class="panel-head">
+        <h2 class="panel-title">{{ ui.icon("script") }} <span id="script-title">대화 스크립트</span></h2>
+        <div class="controls">
+          <label for="script-kind" class="sr-only">결과 종류</label>
+          <select id="script-kind">
+            <option value="NORMALIZED">정규화</option>
+            <option value="RAW">원본</option>
+          </select>
+          <div class="download-group" id="script-download" hidden>
+            <span class="hint-inline">다운로드</span>
+            <a class="download" data-format="txt" href="#">TXT</a>
+            <a class="download" data-format="srt" href="#">SRT</a>
+            <a class="download" data-format="vtt" href="#">VTT</a>
+            <a class="download" data-format="json" href="#">JSON</a>
+          </div>
+          <button type="button" id="script-caption">{{ ui.icon("activity") }} 캡션 재생</button>
+          <a class="back-link" id="script-detail-link" href="/">상세 열기</a>
+        </div>
+      </div>
+      <div class="panel-body">
+        <p class="hint" id="script-meta"></p>
+        {# 세그먼트는 JS 가 textContent 로만 넣는다. Transcript 는 Untrusted Data 다 (§13). #}
+        <ol class="segments" id="script-segments"></ol>
+        <p class="empty" id="script-placeholder">왼쪽에서 상담을 고르면 스크립트가 표시됩니다.</p>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/consultations.js"></script>
+{% endblock %}

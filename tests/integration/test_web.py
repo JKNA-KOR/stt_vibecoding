@@ -76,7 +76,20 @@ def _login(client: TestClient, username: str = "agent") -> None:
 # --- 접근 제어 -----------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", ["/", "/jobs/stt-anything", "/admin"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/",
+        "/jobs/stt-anything",
+        "/consultations",
+        "/realtime",
+        "/glossary",
+        "/qa",
+        "/qa/scores",
+        "/qa/compliance",
+        "/admin",
+    ],
+)
 def test_unauthenticated_pages_redirect_to_login(client: TestClient, path: str) -> None:
     """화면은 401 JSON 대신 로그인으로 보낸다. API 는 그대로 401 이다."""
     response = client.get(path, follow_redirects=False)
@@ -143,6 +156,12 @@ def _rendered_pages(client: TestClient) -> dict[str, str]:
         "/login": client.get("/login", follow_redirects=True).text,
         "/": client.get("/").text,
         "/jobs/stt-x": client.get("/jobs/stt-x").text,
+        "/consultations": client.get("/consultations").text,
+        "/realtime": client.get("/realtime").text,
+        "/glossary": client.get("/glossary").text,
+        "/qa": client.get("/qa").text,
+        "/qa/scores": client.get("/qa/scores").text,
+        "/qa/compliance": client.get("/qa/compliance").text,
         "/admin": client.get("/admin").text,
     }
 
@@ -174,7 +193,17 @@ def test_no_external_resources(client: TestClient) -> None:
 
 
 def test_static_assets_are_served(client: TestClient) -> None:
-    for asset in ("/static/app.css", "/static/app.js", "/static/jobs.js"):
+    for asset in (
+        "/static/app.css",
+        "/static/app.js",
+        "/static/jobs.js",
+        "/static/consultations.js",
+        "/static/qa.js",
+        "/static/qa_list.js",
+        "/static/realtime.js",
+        "/static/pcm-worklet.js",
+        "/static/glossary.js",
+    ):
         response = client.get(asset)
         assert response.status_code == 200, asset
         assert response.content
@@ -244,3 +273,64 @@ def test_username_is_escaped_in_the_page(client: TestClient, database: None) -> 
 
     assert "<script>alert(1)</script>" not in body
     assert "&lt;script&gt;" in body
+
+
+# --- 상담 목록 / QA 화면 -----------------------------------------------------------
+
+
+def test_consultation_page_leaves_the_script_for_javascript(client: TestClient) -> None:
+    """스크립트 본문은 API 에서 받아 textContent 로 넣는다. 서버 렌더 경로를 두지 않는다."""
+    _login(client)
+    body = client.get("/consultations").text
+
+    assert '<ol class="segments" id="script-segments"></ol>' in body
+    assert "{{" not in body
+
+
+def test_qa_menus_are_present_for_signed_in_users(client: TestClient) -> None:
+    _login(client)
+    body = client.get("/").text
+
+    assert 'href="/qa"' in body
+    assert 'href="/qa/scores"' in body
+    assert 'href="/qa/compliance"' in body
+    assert 'href="/consultations"' in body
+
+
+def test_qa_rubric_editor_is_admin_only(client: TestClient) -> None:
+    """감사 권한만 있는 사용자에게 평가 기준 편집기를 그리지 않는다 (Harness §46)."""
+    _login(client, "auditor")
+    assert 'id="rubric-text"' not in client.get("/admin").text
+
+    _login(client, "root")
+    body = client.get("/admin").text
+    assert 'id="rubric-text"' in body
+    assert 'id="compliance-text"' in body
+
+
+# --- 실시간 전사 화면 ---------------------------------------------------------------
+
+
+def test_realtime_menu_is_present(client: TestClient) -> None:
+    _login(client)
+
+    assert 'href="/realtime"' in client.get("/").text
+
+
+def test_realtime_page_says_why_it_is_unavailable(client: TestClient) -> None:
+    """기능이 꺼져 있어도 화면은 연다. 설정이 꺼진 것과 화면이 없는 것은 다르다."""
+    _login(client)
+    body = client.get("/realtime").text
+
+    assert 'data-enabled="false"' in body
+    assert "ENABLE_REALTIME_STT" in body
+    # 쓸 수 없는 화면에 마이크 컨트롤을 그리지 않는다.
+    assert 'id="rt-segments"' not in body
+
+
+def test_worklet_is_served_as_javascript(client: TestClient) -> None:
+    """AudioWorklet 모듈은 같은 출처에서 와야 한다 (script-src 'self')."""
+    response = client.get("/static/pcm-worklet.js")
+
+    assert response.status_code == 200
+    assert "registerProcessor" in response.text

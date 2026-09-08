@@ -19,6 +19,7 @@ from app.core.config import Settings
 from app.core.exceptions import LLMError
 from app.llm.analyzer import TranscriptAnalyzer
 from app.llm.openai_compatible_provider import OpenAICompatibleProvider
+from app.llm.openrouter_provider import OpenRouterProvider
 from app.llm.prompts import DEFAULT_ANALYSIS_PROMPT
 from app.llm.schemas import CustomerReaction
 from app.stt.schemas import TranscriptSegment
@@ -45,6 +46,8 @@ class _Recorder:
         self.path = ""
         self.status = 200
         self.content: str = json.dumps(_ANALYSIS, ensure_ascii=False)
+        # 추론 모델은 토큰 한도에서 잘린 응답을 내기도 한다. 그 경로도 재현한다.
+        self.finish_reason = "stop"
 
 
 @pytest.fixture
@@ -67,7 +70,10 @@ def stub() -> Iterator[tuple[str, _Recorder]]:
             payload = json.dumps(
                 {
                     "choices": [
-                        {"message": {"content": recorder.content}, "finish_reason": "stop"}
+                        {
+                            "message": {"content": recorder.content},
+                            "finish_reason": recorder.finish_reason,
+                        }
                     ]
                 }
             ).encode()
@@ -229,3 +235,106 @@ def test_unreachable_endpoint_fails_fast(settings: Settings) -> None:
 
     with pytest.raises(LLMError):
         _analyze(settings, provider)
+
+
+# --- OpenRouter (Harness §5.2 / §8.2) -------------------------------------------
+#
+# OpenRouter 는 OpenAI 호환이지만 추론 모델을 라우팅한다. 같은 스텁 서버로, 일반
+# 엔드포인트와 무엇이 달라지는지만 확인한다.
+
+
+def _openrouter(settings: Settings, base_url: str, **overrides: object) -> OpenRouterProvider:
+    return OpenRouterProvider(
+        settings.model_copy(
+            update={
+                "llm_provider": "openrouter",
+                "llm_base_url": base_url,
+                "llm_api_key": SecretStr(_KEY),
+                "llm_model_name": "z-ai/glm-5.2",
+                "llm_json_mode": "json_object",
+                **overrides,
+            }
+        )
+    )
+
+
+def test_openrouter_reserves_room_for_reasoning_tokens(settings: Settings, stub) -> None:
+    """추론 토큰이 출력 한도를 함께 쓴다. 한도를 보내지 않으면 본문이 잘린다."""
+    base_url, recorder = stub
+
+    _analyze(settings, _openrouter(settings, base_url, llm_max_output_tokens=12345))
+
+    assert recorder.body["max_tokens"] == 12345
+
+
+def test_openrouter_sends_reasoning_effort_only_when_configured(
+    settings: Settings, stub
+) -> None:
+    base_url, recorder = stub
+
+    _analyze(settings, _openrouter(settings, base_url))
+    assert "reasoning" not in recorder.body
+
+    _analyze(settings, _openrouter(settings, base_url, llm_reasoning_effort="low"))
+    assert recorder.body["reasoning"] == {"effort": "low"}
+
+
+def test_openrouter_attribution_headers_are_opt_in(settings: Settings, stub) -> None:
+    """사내 호스트명이 외부로 나가는 것은 운영자가 결정한다 (Harness §44)."""
+    base_url, recorder = stub
+
+    _analyze(settings, _openrouter(settings, base_url))
+    assert "X-Title" not in recorder.headers
+    assert "HTTP-Referer" not in recorder.headers
+
+    _analyze(settings, _openrouter(settings, base_url, llm_app_name="STT"))
+    assert recorder.headers["X-Title"] == "STT"
+
+
+def test_openrouter_recovers_json_wrapped_in_a_code_fence(
+    settings: Settings, stub
+) -> None:
+    base_url, recorder = stub
+    body = json.dumps(_ANALYSIS, ensure_ascii=False)
+    recorder.content = f"설명입니다.\n```json\n{body}\n```"
+
+    outcome = _analyze(settings, _openrouter(settings, base_url))
+
+    assert outcome.content.customer_reaction is CustomerReaction.INTERESTED
+
+
+def test_openrouter_recovers_json_after_a_stray_brace(settings: Settings, stub) -> None:
+    """GLM 계열은 여는 중괄호를 한 번 더 흘리기도 한다. 바깥 괄호 기준 절단으로는 못 고친다."""
+    base_url, recorder = stub
+    recorder.content = "{\n" + json.dumps(_ANALYSIS, ensure_ascii=False)
+
+    outcome = _analyze(settings, _openrouter(settings, base_url))
+
+    assert outcome.content.summary == ["요약"]
+
+
+def test_openrouter_truncated_response_names_the_setting_to_change(
+    settings: Settings, stub
+) -> None:
+    """조용히 빈 결과를 내지 않는다 (Harness §4.3). 무엇을 올려야 하는지 알려준다."""
+    base_url, recorder = stub
+    recorder.content = ""
+    recorder.finish_reason = "length"
+
+    with pytest.raises(LLMError) as excinfo:
+        _analyze(settings, _openrouter(settings, base_url))
+
+    assert "LLM_MAX_OUTPUT_TOKENS" in excinfo.value.internal_detail
+    assert _KEY not in str(excinfo.value)
+
+
+def test_openrouter_empty_body_points_at_reasoning_budget(
+    settings: Settings, stub
+) -> None:
+    base_url, recorder = stub
+    recorder.content = ""
+
+    with pytest.raises(LLMError) as excinfo:
+        _analyze(settings, _openrouter(settings, base_url))
+
+    assert "reasoning" in excinfo.value.internal_detail

@@ -34,6 +34,7 @@ from app.audit.events import AuditEventType, AuditResult
 from app.auth.roles import UserRole
 from app.jobs.state import JobStatus
 from app.llm.state import AnalysisStatus
+from app.qa.state import QAStatus
 from app.storage.database import Base
 from app.stt.schemas import TranscriptKind
 
@@ -158,6 +159,12 @@ class Job(Base):
         String(20), nullable=False, default=AnalysisStatus.NONE
     )
     analysis_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # QA 평가도 같은 이유로 상태를 따로 둔다. 기준(루브릭)이 바뀌면 다시 돌리게 되는데,
+    # 그때 전사나 분석까지 다시 돌 필요는 없다.
+    qa_status: Mapped[QAStatus] = mapped_column(
+        String(20), nullable=False, default=QAStatus.NONE
+    )
+    qa_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, index=True
@@ -168,6 +175,10 @@ class Job(Base):
     queue_wait_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     processing_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     real_time_factor: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 모델이 스스로 매긴 평균 확신도(0~1). **측정된 정확도가 아니다** — 낮으면 사람이
+    # 확인해 볼 구간이라는 신호일 뿐이며, 화면에도 "추정"으로 표기한다 (Harness §20).
+    # 확신도를 주지 않는 엔진에서는 NULL 이다.
+    transcription_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # --- 보관 정책 (Harness §21) ---
     audio_expires_at: Mapped[datetime | None] = mapped_column(
@@ -184,12 +195,53 @@ class Job(Base):
     analyses: Mapped[list[TranscriptAnalysis]] = relationship(
         back_populates="job", cascade="all, delete-orphan"
     )
+    qa_evaluations: Mapped[list[QAEvaluation]] = relationship(
+        back_populates="job", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         # 동일 사용자·동일 키의 중복 Job 생성을 DB 레벨에서 막는다 (Harness §26).
         UniqueConstraint("created_by", "idempotency_key", name="uq_job_owner_idempotency"),
         Index("ix_stt_job_owner_created", "created_by", "created_at"),
     )
+
+    # --- 목록 화면용 QA 요약 ---
+    #
+    # 점수를 Job 에 복사해 두지 않고 관계에서 읽는다. 복사하면 재평가 때 두 곳을 맞춰야
+    # 하고, 어긋나면 어느 쪽이 진실인지 알 수 없게 된다 (Harness §50 — 파생 결과는
+    # 한 곳에만 둔다). 목록 조회는 `selectinload` 로 한 번에 가져와 N+1 을 피한다.
+
+    @property
+    def _latest_qa(self) -> QAEvaluation | None:
+        for evaluation in self.qa_evaluations:
+            if evaluation.deleted_at is None:
+                return evaluation
+        return None
+
+    @property
+    def qa_overall_score(self) -> float | None:
+        qa = self._latest_qa
+        return qa.overall_score if qa else None
+
+    @property
+    def qa_grade(self) -> str | None:
+        qa = self._latest_qa
+        return qa.grade if qa else None
+
+    @property
+    def qa_compliance_score(self) -> float | None:
+        qa = self._latest_qa
+        return qa.compliance_score if qa else None
+
+    @property
+    def qa_violation_count(self) -> int | None:
+        qa = self._latest_qa
+        return qa.violation_count if qa else None
+
+    @property
+    def qa_has_critical_violation(self) -> bool:
+        qa = self._latest_qa
+        return bool(qa.has_critical_violation) if qa else False
 
 
 class Transcript(Base):
@@ -289,6 +341,120 @@ class TranscriptAnalysis(Base):
     __table_args__ = (
         # Job 당 최신 분석 하나만 유지한다. 재분석은 기존 행을 대체한다.
         UniqueConstraint("job_id", name="uq_analysis_job"),
+    )
+
+
+class QAEvaluation(Base):
+    """상담 품질 평가 결과 (Harness §50 / §51).
+
+    분석과 나란히 서는 또 하나의 파생 결과다. Transcript 를 바꾸지 않으며, 평가가
+    실패해도 전사와 분석은 그대로다.
+
+    평가 내용은 녹취에서 파생되었으므로 **원본과 같은 Confidential 등급**이며 보관기간도
+    Transcript 를 따른다 (Harness §8.1 / §21). 특히 `violations` 안의 근거 발화는
+    녹취 원문의 인용이므로 취급이 더 조심스럽다.
+
+    `overall_score` 와 `compliance_score` 를 별도 컬럼으로 둔 이유는 목록 화면이
+    이 두 값으로 정렬·집계하기 때문이다. JSON 안에 묻어 두면 매번 전체를 읽어야 한다.
+    """
+
+    __tablename__ = "stt_qa_evaluation"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=new_uuid)
+    job_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("stt_job.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # 어떤 Transcript 를 보고 매긴 점수인지 (Harness §51 lineage).
+    transcript_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("stt_transcript.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # --- 점수 (집계·정렬 대상이라 별도 컬럼) ---
+    overall_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, index=True)
+    grade: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+    compliance_score: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, index=True
+    )
+    # 심각 위반이 하나라도 있으면 목록에서 바로 걸러낼 수 있어야 한다.
+    has_critical_violation: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, index=True
+    )
+    violation_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # --- 평가 본문 ---
+    score_items: Mapped[list | None] = mapped_column(JsonType, nullable=True)
+    violations: Mapped[list | None] = mapped_column(JsonType, nullable=True)
+    strengths: Mapped[list | None] = mapped_column(JsonType, nullable=True)
+    improvements: Mapped[list | None] = mapped_column(JsonType, nullable=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    # --- Provenance (Harness §20 / §36) ---
+    # 루브릭이 바뀌면 점수가 달라진다. 기준의 해시를 함께 남겨야 "지난달 82점과
+    # 이번달 74점"이 같은 잣대로 매겨진 값인지 판별할 수 있다.
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    rubric_version: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    compliance_version: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    transcript_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    warnings: Mapped[list | None] = mapped_column(JsonType, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, index=True
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    job: Mapped[Job] = relationship(back_populates="qa_evaluations")
+
+    __table_args__ = (
+        # Job 당 최신 평가 하나만 유지한다. 재평가는 기존 행을 대체한다.
+        UniqueConstraint("job_id", name="uq_qa_job"),
+    )
+
+
+class GlossaryTerm(Base):
+    """금융권 용어사전 항목 (FR-M-004).
+
+    업무 데이터가 아니라 **설정에 가깝다.** 녹취에서 파생된 값이 아니므로 보관정책
+    대상이 아니고, 삭제해도 되돌릴 수 없는 기록이 사라지지 않는다.
+
+    두 곳에 쓰인다.
+      1. 전사 힌트 — Whisper 계열의 `initial_prompt` 로 들어가 인식 결과를 표준 용어
+         쪽으로 끌어당긴다. 프롬프트 길이 상한이 있어 `priority` 순으로 잘라 쓴다.
+      2. 분석·QA 프롬프트 — 모델이 용어를 오해하지 않도록 뜻을 함께 알려 준다.
+
+    `aliases` 는 오인식되기 쉬운 표기다 (예: "중도상환수수료" → "중도 상환 수수료").
+    """
+
+    __tablename__ = "glossary_term"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=new_uuid)
+    term: Mapped[str] = mapped_column(String(120), nullable=False)
+    aliases: Mapped[list | None] = mapped_column(JsonType, nullable=True)
+    category: Mapped[str] = mapped_column(String(40), nullable=False, default="", index=True)
+    definition: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # 끄면 힌트와 프롬프트에서 빠진다. 지우지 않고 끌 수 있어야 되돌리기 쉽다.
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, index=True
+    )
+    # 힌트 길이 상한 때문에 전부는 실을 수 없다. 큰 값이 먼저 실린다.
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+    updated_by: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+    __table_args__ = (
+        UniqueConstraint("term", name="uq_glossary_term"),
     )
 
 

@@ -49,9 +49,26 @@ x-app-env: &app-env
   STT_MAX_UPLOAD_MB: ${STT_MAX_UPLOAD_MB:-500}
   STT_MAX_AUDIO_MINUTES: ${STT_MAX_AUDIO_MINUTES:-180}
 
+  # 외부 전사 API (STT_ENGINE=groq-whisper). 음성 원본이 사내를 벗어나므로
+  # ALLOW_EXTERNAL_STT 승인이 없으면 기동이 거부된다 (SEC-021).
+  STT_API_BASE_URL: ${STT_API_BASE_URL:-https://api.groq.com/openai/v1}
+  STT_API_KEY: ${STT_API_KEY:-}
+  STT_API_TIMEOUT_SECONDS: ${STT_API_TIMEOUT_SECONDS:-600}
+  STT_API_MAX_UPLOAD_MB: ${STT_API_MAX_UPLOAD_MB:-25}
+  ALLOW_EXTERNAL_STT: ${ALLOW_EXTERNAL_STT:-false}
+
   # LLM 분석 (Harness §8.2 / §54). 기본값은 꺼짐이다.
   # 녹취 본문이 사내 경계를 벗어나지 않도록 로컬 LLM 을 전제로 한다.
   ENABLE_LLM_ANALYSIS: ${ENABLE_LLM_ANALYSIS:-false}
+  # 상담 품질 평가(QA). 분석과 같은 Provider 를 쓰며, 켜면 상담당 LLM 호출이 2회가 된다.
+  ENABLE_QA: ${ENABLE_QA:-false}
+  QA_AUTO_RUN: ${QA_AUTO_RUN:-false}
+
+  # 실시간(준실시간) 전사. 켜면 이 출처에 브라우저 마이크 권한이 열린다 (Harness §11).
+  ENABLE_REALTIME_STT: ${ENABLE_REALTIME_STT:-false}
+  REALTIME_SEGMENT_SECONDS: ${REALTIME_SEGMENT_SECONDS:-6}
+  REALTIME_MAX_SESSION_SECONDS: ${REALTIME_MAX_SESSION_SECONDS:-1800}
+  REALTIME_MAX_SESSIONS: ${REALTIME_MAX_SESSIONS:-4}
   LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
   LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434}
   LLM_MODEL_NAME: ${LLM_MODEL_NAME:-gemma3:latest}
@@ -59,6 +76,11 @@ x-app-env: &app-env
   LLM_JSON_MODE: ${LLM_JSON_MODE:-json_schema}
   LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-300}
   LLM_MAX_TRANSCRIPT_CHARS: ${LLM_MAX_TRANSCRIPT_CHARS:-20000}
+  # 추론 모델(OpenRouter 경유 GLM 등) 전용. 추론 토큰이 출력 한도를 함께 소비한다.
+  LLM_MAX_OUTPUT_TOKENS: ${LLM_MAX_OUTPUT_TOKENS:-32768}
+  LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-}
+  LLM_APP_NAME: ${LLM_APP_NAME:-}
+  LLM_SITE_URL: ${LLM_SITE_URL:-}
   ALLOW_EXTERNAL_LLM: ${ALLOW_EXTERNAL_LLM:-false}
 
   # JSON 연동 (외부 시스템 통합). 기본값은 업로드 꺼짐 / 내보내기 켜짐이다.

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ui %}
+{% set page_icon = "alert" %}
+{% block title %}컴플라이언스 · STT 서비스{% endblock %}
+{% block page_title %}컴플라이언스{% endblock %}
+{% block page_subtitle %}고객센터에서 하면 안 되는 행위가 확인된 상담{% endblock %}
+
+{% block topbar_tools %}
+<button type="button" id="score-refresh">{{ ui.icon("refresh") }} 새로고침</button>
+{% endblock %}
+
+{% block content %}
+{# data-only-violations 로 같은 스크립트가 두 화면을 그린다. 목록의 의미만 다르다. #}
+<section class="panel" id="qa-list-panel" data-only-violations="true">
+  <div class="panel-head">
+    <h2 class="panel-title">{{ ui.icon("alert") }} 위반이 확인된 상담</h2>
+    <span class="hint-inline" id="qa-list-count"></span>
+  </div>
+
+  <div class="panel-body">
+    <p class="hint">
+      각 위반은 녹취에서 인용한 발화가 있을 때만 기록됩니다. 상담을 열면 근거 발화를 볼 수 있습니다.
+    </p>
+  </div>
+
+  <div class="table-frame">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>상담</th>
+          <th>컴플라이언스</th>
+          <th>위반 건수</th>
+          <th>심각 위반</th>
+          <th>상담 점수</th>
+          <th>평가 시각</th>
+        </tr>
+      </thead>
+      <tbody id="qa-list-body"></tbody>
+    </table>
+  </div>
+
+  <p class="empty" id="qa-list-empty" hidden>위반이 확인된 상담이 없습니다.</p>
+
+  <div class="panel-foot">
+    <div class="pager">
+      <button type="button" id="qa-prev" disabled>이전</button>
+      <span id="qa-page"></span>
+      <button type="button" id="qa-next" disabled>다음</button>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/qa_list.js"></script>
+{% endblock %}

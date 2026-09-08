@@ -1,56 +1,188 @@
 {% extends "base.html" %}
-{% block title %}작업 상세 · STT 서비스{% endblock %}
+{% import "_icons.html" as ui %}
+{% set page_icon = "audio" %}
+{% block title %}상담 상세 · STT 서비스{% endblock %}
+{# 파일명은 JS 가 textContent 로 넣는다. 서버 렌더 경로를 두지 않는다 (FR-T-005). #}
+{% block page_title %}<span id="job-title">상담 상세</span>{% endblock %}
+{% block page_subtitle %}전사 스크립트와 AI 분석을 상담 단위로 확인한다{% endblock %}
+
+{% block topbar_tools %}
+<a class="back-link" href="/">{{ ui.icon("back") }} 목록으로</a>
+{% endblock %}
 
 {% block content %}
-{# job_id 는 서버가 넘긴 값이며 autoescape 로 이스케이프된다. JS 는 data 속성에서 읽는다. #}
-<section class="card" id="job-card" data-job-id="{{ job_id }}"
-         data-can-download="{{ 'true' if can_download else 'false' }}">
-  <div class="card-head">
-    <h2 id="job-title">작업 상세</h2>
-    <a class="back-link" href="/">목록으로</a>
-  </div>
+<div class="consult">
 
-  <dl class="facts" id="job-facts"></dl>
-
-  <div class="actions" id="job-actions"></div>
-</section>
-
-<section class="card" id="analysis-card" hidden>
-  <div class="card-head">
-    <h2>AI 분석</h2>
-    <div class="controls">
-      <span class="hint-inline" id="analysis-meta"></span>
-      <button type="button" id="reanalyze-button">다시 분석</button>
+  {# ---- 상담 메뉴 프레임 --------------------------------------------------
+     같은 상담 안에서 보는 대상만 바꾼다. 화면 이동이 아니므로 폴링이 끊기지 않는다. #}
+  <aside class="panel consult-menu">
+    <div class="panel-head">
+      <h2 class="panel-title">{{ ui.icon("script") }} 상담 메뉴</h2>
     </div>
-  </div>
-  <p class="hint" id="analysis-warning" hidden></p>
-  <dl class="facts" id="analysis-facts"></dl>
-</section>
+    <div class="panel-body" id="consult-menu">
+      <button type="button" class="menu-item active" data-pane="pane-overview">
+        {{ ui.icon("list") }} 상담 개요
+      </button>
+      <button type="button" class="menu-item" data-pane="pane-analysis">
+        {{ ui.icon("sparkles") }} AI 분석
+        <span class="menu-count" id="menu-analysis-state"></span>
+      </button>
+      <button type="button" class="menu-item" data-pane="pane-qa">
+        {{ ui.icon("shield") }} QA 평가
+        <span class="menu-count" id="menu-qa-score"></span>
+      </button>
+      <button type="button" class="menu-item" data-pane="pane-script">
+        {{ ui.icon("script") }} 대화 스크립트
+        <span class="menu-count" id="menu-segment-count"></span>
+      </button>
+      <button type="button" class="menu-item" data-pane="pane-manage">
+        {{ ui.icon("tools") }} 작업 관리
+      </button>
+    </div>
+  </aside>
 
-<section class="card" id="transcript-card" hidden>
-  <div class="card-head">
-    <h2>변환 결과</h2>
-    <div class="controls">
-      <label for="kind-select" class="sr-only">결과 종류</label>
-      <select id="kind-select">
-        <option value="NORMALIZED">정규화</option>
-        <option value="RAW">원본</option>
-      </select>
-      <div class="download-group" id="download-group" hidden>
-        <span class="hint-inline">다운로드</span>
-        <a class="download" data-format="txt" href="#">TXT</a>
-        <a class="download" data-format="srt" href="#">SRT</a>
-        <a class="download" data-format="vtt" href="#">VTT</a>
-        <a class="download" data-format="json" href="#">JSON</a>
+  {# ---- 내용 프레임 ------------------------------------------------------- #}
+  <div>
+
+    {# job_id 는 서버가 넘긴 값이며 autoescape 로 이스케이프된다. JS 는 data 속성에서 읽는다. #}
+    <section class="pane active" id="pane-overview">
+      <div class="panel" id="job-card" data-job-id="{{ job_id }}"
+           data-can-download="{{ 'true' if can_download else 'false' }}">
+        <div class="panel-head">
+          <h2 class="panel-title">{{ ui.icon("audio") }} 상담 개요</h2>
+        </div>
+        <div class="panel-body">
+          <dl class="facts" id="job-facts"></dl>
+        </div>
       </div>
-    </div>
+    </section>
+
+    <section class="pane" id="pane-analysis">
+      <div class="panel" id="analysis-card" hidden>
+        <div class="panel-head">
+          <h2 class="panel-title">{{ ui.icon("sparkles") }} AI 분석</h2>
+          <div class="controls">
+            <span class="hint-inline" id="analysis-meta"></span>
+            <button type="button" id="reanalyze-button">{{ ui.icon("refresh") }} 다시 분석</button>
+          </div>
+        </div>
+        <div class="panel-body">
+          <p class="hint" id="analysis-warning" hidden></p>
+          <dl class="facts" id="analysis-facts"></dl>
+        </div>
+      </div>
+      <div class="panel" id="analysis-empty">
+        <div class="panel-head">
+          <h2 class="panel-title">{{ ui.icon("sparkles") }} AI 분석</h2>
+        </div>
+        <div class="panel-body">
+          <p class="empty">아직 분석 결과가 없습니다. 전사가 끝나면 분석이 이어집니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="pane" id="pane-qa">
+      <div class="panel" id="qa-card" hidden>
+        <div class="panel-head">
+          <h2 class="panel-title">{{ ui.icon("shield") }} QA 평가</h2>
+          <div class="controls">
+            <span class="hint-inline" id="qa-meta"></span>
+            <button type="button" id="reevaluate-button">{{ ui.icon("refresh") }} 다시 평가</button>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="score-row">
+            <div class="score-box">
+              <div class="stat-label">상담 점수</div>
+              <div class="score-big" id="qa-overall">-</div>
+              <div id="qa-grade-slot"></div>
+            </div>
+            <div class="score-box">
+              <div class="stat-label">컴플라이언스 점수</div>
+              <div class="score-big" id="qa-compliance">-</div>
+              <div id="qa-critical-slot"></div>
+            </div>
+          </div>
+
+          <p class="hint" id="qa-summary"></p>
+          <p class="hint" id="qa-warning" hidden></p>
+
+          <h3 class="panel-title">{{ ui.icon("gauge") }} 항목별 점수</h3>
+          <div class="bar-chart" id="qa-items"></div>
+
+          <h3 class="panel-title">{{ ui.icon("alert") }} 컴플라이언스 위반</h3>
+          <div id="qa-violations"></div>
+
+          <h3 class="panel-title">{{ ui.icon("check") }} 잘한 점 / 개선할 점</h3>
+          <dl class="facts" id="qa-notes"></dl>
+        </div>
+      </div>
+      <div class="panel" id="qa-empty">
+        <div class="panel-head">
+          <h2 class="panel-title">{{ ui.icon("shield") }} QA 평가</h2>
+          <div class="controls">
+            <button type="button" id="evaluate-button">{{ ui.icon("shield") }} QA 평가 실행</button>
+          </div>
+        </div>
+        <div class="panel-body">
+          <p class="empty" id="qa-empty-message">
+            아직 평가 결과가 없습니다. 전사가 끝난 상담이면 지금 평가할 수 있습니다.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="pane" id="pane-script">
+      <div class="panel" id="transcript-card" hidden>
+        <div class="panel-head">
+          <h2 class="panel-title">{{ ui.icon("script") }} 대화 스크립트</h2>
+          <div class="controls">
+            <label for="kind-select" class="sr-only">결과 종류</label>
+            <select id="kind-select">
+              <option value="NORMALIZED">정규화</option>
+              <option value="RAW">원본</option>
+            </select>
+            <button type="button" id="caption-play">{{ ui.icon("activity") }} 캡션 재생</button>
+            <div class="download-group" id="download-group" hidden>
+              <span class="hint-inline">다운로드</span>
+              <a class="download" data-format="txt" href="#">TXT</a>
+              <a class="download" data-format="srt" href="#">SRT</a>
+              <a class="download" data-format="vtt" href="#">VTT</a>
+              <a class="download" data-format="json" href="#">JSON</a>
+            </div>
+          </div>
+        </div>
+        <div class="panel-body">
+          <p class="hint" id="lineage-hint"></p>
+          {# 세그먼트는 JS 가 textContent 로만 넣는다. Transcript 는 Untrusted Data 다 (§13). #}
+          <ol class="segments" id="segments"></ol>
+        </div>
+      </div>
+      <div class="panel" id="transcript-empty">
+        <div class="panel-head">
+          <h2 class="panel-title">{{ ui.icon("script") }} 대화 스크립트</h2>
+        </div>
+        <div class="panel-body">
+          <p class="empty">변환 결과가 아직 없습니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="pane" id="pane-manage">
+      <div class="panel">
+        <div class="panel-head">
+          <h2 class="panel-title">{{ ui.icon("tools") }} 작업 관리</h2>
+        </div>
+        <div class="panel-body">
+          <p class="hint">
+            삭제는 되돌릴 수 없습니다. 원본 음성을 지워도 변환 결과는 남습니다.
+          </p>
+          <div class="actions" id="job-actions"></div>
+        </div>
+      </div>
+    </section>
   </div>
-
-  <p class="hint" id="lineage-hint"></p>
-
-  {# 세그먼트는 JS 가 textContent 로만 넣는다. Transcript 는 Untrusted Data 다 (§13). #}
-  <ol class="segments" id="segments"></ol>
-</section>
+</div>
 {% endblock %}
 
 {% block scripts %}

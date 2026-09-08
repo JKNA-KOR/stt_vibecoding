@@ -14,6 +14,7 @@ from app.core.config import ConfigurationError, Settings
 from app.core.logging import get_logger
 from app.stt.base import STTEngine
 from app.stt.faster_whisper_engine import FasterWhisperEngine
+from app.stt.groq_whisper_engine import GroqWhisperEngine
 from app.stt.mock_engine import MockSTTEngine
 
 logger = get_logger(__name__)
@@ -21,6 +22,7 @@ logger = get_logger(__name__)
 # 새 엔진은 여기에만 등록하면 된다. 등록되지 않은 이름은 기동 시점에 거부된다.
 _REGISTRY: dict[str, Callable[[Settings], STTEngine]] = {
     FasterWhisperEngine.engine_name: FasterWhisperEngine,
+    GroqWhisperEngine.engine_name: GroqWhisperEngine,
     MockSTTEngine.engine_name: MockSTTEngine,
 }
 

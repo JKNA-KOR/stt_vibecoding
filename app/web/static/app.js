@@ -153,7 +153,84 @@ function setProgress(bar, ratio) {
   bar.className = "progress-bar p" + step;
 }
 
+/* --- 라이브 캡션 재생 -------------------------------------------------------
+ *
+ * 전사 결과를 한 줄씩 드러낸다. **이것은 표시 효과이지 스트리밍이 아니다.** 업로드
+ * 경로는 파일 전체를 한 번에 전사하므로 중간 결과가 존재하지 않는다 — 진짜 실시간
+ * 자막은 실시간 전사 화면(`/realtime`)의 몫이다. 이름으로 둘을 헷갈리게 하지 않으려고
+ * 여기 적어 둔다 (Harness §4.3).
+ *
+ * 긴 녹취를 실제 발화 속도로 재생하면 끝까지 보는 데 통화 시간만큼 걸린다. 그래서
+ * 고정 간격으로 빠르게 훑는다.
+ */
+
+const CAPTION_STEP_MS = 140;
+// 조각이 많으면 재생만 몇 분이 걸린다. 그 이상은 효과 없이 바로 보여준다.
+const CAPTION_MAX_ITEMS = 120;
+
+const captionState = { timer: null, list: null };
+
+/** 목록의 자식들을 한 줄씩 드러낸다. 이미 재생 중이면 먼저 멈춘다. */
+function playCaptions(list, { onDone } = {}) {
+  stopCaptions();
+  const items = Array.from(list.children);
+  if (items.length === 0 || items.length > CAPTION_MAX_ITEMS) {
+    revealAll(list);
+    if (onDone) onDone();
+    return;
+  }
+
+  captionState.list = list;
+  for (const item of items) item.classList.add("caption-hidden");
+
+  let index = 0;
+  captionState.timer = window.setInterval(() => {
+    if (index >= items.length) {
+      stopCaptions();
+      if (onDone) onDone();
+      return;
+    }
+    const item = items[index];
+    item.classList.remove("caption-hidden");
+    item.classList.add("caption-in");
+    item.scrollIntoView({ block: "nearest" });
+    index += 1;
+  }, CAPTION_STEP_MS);
+}
+
+/** 재생을 멈추고 남은 줄을 모두 드러낸다. 중간에 끊겨 사라진 줄이 없어야 한다. */
+function stopCaptions() {
+  if (captionState.timer !== null) {
+    window.clearInterval(captionState.timer);
+    captionState.timer = null;
+  }
+  if (captionState.list) {
+    revealAll(captionState.list);
+    captionState.list = null;
+  }
+}
+
+function revealAll(list) {
+  for (const item of list.children) item.classList.remove("caption-hidden");
+}
+
+/** 사용자가 애니메이션을 원치 않으면 효과를 쓰지 않는다 (접근성). */
+function captionsAllowed() {
+  return !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  // 좁은 화면에서는 사이드바가 접혀 있다. 넓은 화면에서는 토글 버튼 자체가 보이지 않는다.
+  const sidebar = document.getElementById("sidebar");
+  const toggle = document.getElementById("sidebar-toggle");
+  if (sidebar && toggle) {
+    toggle.addEventListener("click", () => sidebar.classList.toggle("open"));
+    // 메뉴를 고르면 화면이 바뀐다. 열린 채로 두면 내용을 가린다.
+    for (const link of sidebar.querySelectorAll(".nav-item")) {
+      link.addEventListener("click", () => sidebar.classList.remove("open"));
+    }
+  }
+
   const logout = document.getElementById("logout-button");
   if (logout) {
     logout.addEventListener("click", async () => {

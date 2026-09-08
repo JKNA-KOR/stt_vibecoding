@@ -47,17 +47,11 @@ class OpenAICompatibleProvider(LLMProvider):
         json_schema: dict[str, Any],
         timeout_seconds: float,
     ) -> LLMResponse:
-        payload: dict[str, Any] = {
-            "model": self._model,
-            # 지시문과 데이터를 별도 메시지로 분리한다 (Harness §13).
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            # 분석은 재현성이 중요하다. 창의성은 필요 없다 (Harness §20).
-            "temperature": 0.1,
-            "response_format": self._response_format(json_schema),
-        }
+        payload = self._build_payload(
+            system_prompt=system_prompt,
+            user_content=user_content,
+            json_schema=json_schema,
+        )
 
         started = time.monotonic()
         raw = self._post("/chat/completions", payload, timeout_seconds)
@@ -68,20 +62,8 @@ class OpenAICompatibleProvider(LLMProvider):
             raise LLMError(internal_detail="llm returned no choices")
 
         first = choices[0]
-        message = (first.get("message") or {}).get("content") or ""
-        if not message:
-            raise LLMError(internal_detail="llm returned an empty message")
-
-        try:
-            content = json.loads(message)
-        except json.JSONDecodeError as exc:
-            # 본문을 로그에 남기지 않는다. 녹취 내용이 섞여 있을 수 있다 (Harness §15).
-            raise LLMError(
-                internal_detail=f"model response is not valid json: {exc.msg}"
-            ) from exc
-
-        if not isinstance(content, dict):
-            raise LLMError(internal_detail="model response is not a json object")
+        message = self._message_text(first)
+        content = self._decode_content(message)
 
         warnings: list[str] = []
         if first.get("finish_reason") == "length":
@@ -103,6 +85,45 @@ class OpenAICompatibleProvider(LLMProvider):
             duration_seconds=duration,
             warnings=tuple(warnings),
         )
+
+    # --- 요청·응답 훅 -----------------------------------------------------
+    #
+    # 엔드포인트마다 다른 것은 이 세 곳뿐이다. 하위 Provider(예: OpenRouter)는 여기만
+    # 덮어쓰고 HTTP 처리와 오류 취급은 그대로 물려받는다 (Harness §5.2).
+
+    def _build_payload(
+        self, *, system_prompt: str, user_content: str, json_schema: dict[str, Any]
+    ) -> dict[str, Any]:
+        return {
+            "model": self._model,
+            # 지시문과 데이터를 별도 메시지로 분리한다 (Harness §13).
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            # 분석은 재현성이 중요하다. 창의성은 필요 없다 (Harness §20).
+            "temperature": 0.1,
+            "response_format": self._response_format(json_schema),
+        }
+
+    def _message_text(self, choice: dict[str, Any]) -> str:
+        message = (choice.get("message") or {}).get("content") or ""
+        if not message:
+            raise LLMError(internal_detail="llm returned an empty message")
+        return message
+
+    def _decode_content(self, message: str) -> dict[str, Any]:
+        try:
+            content = json.loads(message)
+        except json.JSONDecodeError as exc:
+            # 본문을 로그에 남기지 않는다. 녹취 내용이 섞여 있을 수 있다 (Harness §15).
+            raise LLMError(
+                internal_detail=f"model response is not valid json: {exc.msg}"
+            ) from exc
+
+        if not isinstance(content, dict):
+            raise LLMError(internal_detail="model response is not a json object")
+        return content
 
     def _response_format(self, json_schema: dict[str, Any]) -> dict[str, Any]:
         """엔드포인트가 지원하는 방식으로 응답 형식을 강제한다."""

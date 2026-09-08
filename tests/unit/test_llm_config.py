@@ -17,6 +17,7 @@ from app.llm.factory import create_provider
 from app.llm.mock_provider import MockLLMProvider
 from app.llm.ollama_provider import OllamaProvider
 from app.llm.openai_compatible_provider import OpenAICompatibleProvider
+from app.llm.openrouter_provider import OpenRouterProvider
 
 _KEY = "sk-test-do-not-log-me-0123456789"
 
@@ -33,6 +34,7 @@ def _settings(base: Settings, **overrides: object) -> Settings:
     [
         ("ollama", OllamaProvider),
         ("openai-compatible", OpenAICompatibleProvider),
+        ("openrouter", OpenRouterProvider),
         ("mock", MockLLMProvider),
     ],
 )
@@ -188,3 +190,31 @@ def test_key_does_not_reach_log_records() -> None:
     record.llm_api_key = _KEY
 
     assert _KEY not in formatter.format(record)
+
+
+# --- QA 설정 (Harness §5.2 / §37) --------------------------------------------
+
+
+def test_qa_requires_the_analysis_pipeline(settings: Settings) -> None:
+    """QA 는 분석과 같은 Provider 를 쓴다. 분석이 꺼진 채 QA 만 켜면 Provider 설정
+    검증(주소·키·외부 승인)을 건너뛴 채 외부 호출이 나간다."""
+    with pytest.raises(ConfigurationError, match="ENABLE_LLM_ANALYSIS"):
+        Settings.model_validate(
+            {**settings.model_dump(), "enable_llm_analysis": False, "enable_qa": True}
+        )
+
+
+def test_qa_auto_run_requires_qa(settings: Settings) -> None:
+    with pytest.raises(ConfigurationError, match="ENABLE_QA"):
+        Settings.model_validate(
+            {**settings.model_dump(), "enable_qa": False, "qa_auto_run": True}
+        )
+
+
+def test_qa_can_be_enabled_alongside_analysis(settings: Settings) -> None:
+    enabled = Settings.model_validate(
+        {**settings.model_dump(), "enable_qa": True, "qa_auto_run": True}
+    )
+
+    assert enabled.enable_qa is True
+    assert enabled.qa_auto_run is True

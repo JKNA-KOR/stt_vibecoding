@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ui %}
+{% set page_icon = "gauge" %}
+{% block title %}상담 점수 · STT 서비스{% endblock %}
+{% block page_title %}상담 점수{% endblock %}
+{% block page_subtitle %}상담 원칙 기준으로 매긴 상담별 점수{% endblock %}
+
+{% block topbar_tools %}
+<button type="button" id="score-refresh">{{ ui.icon("refresh") }} 새로고침</button>
+{% endblock %}
+
+{% block content %}
+<section class="panel" id="qa-list-panel" data-only-violations="false">
+  <div class="panel-head">
+    <h2 class="panel-title">{{ ui.icon("gauge") }} 평가 결과</h2>
+    <span class="hint-inline" id="qa-list-count"></span>
+  </div>
+
+  <div class="table-frame">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>상담</th>
+          <th>상담 점수</th>
+          <th>등급</th>
+          <th>컴플라이언스</th>
+          <th>위반</th>
+          <th>평가 시각</th>
+        </tr>
+      </thead>
+      <tbody id="qa-list-body"></tbody>
+    </table>
+  </div>
+
+  <p class="empty" id="qa-list-empty" hidden>평가된 상담이 없습니다.</p>
+
+  <div class="panel-foot">
+    <div class="pager">
+      <button type="button" id="qa-prev" disabled>이전</button>
+      <span id="qa-page"></span>
+      <button type="button" id="qa-next" disabled>다음</button>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/qa_list.js"></script>
+{% endblock %}

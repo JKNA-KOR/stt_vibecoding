@@ -32,6 +32,11 @@ AUDITED_CONFIG_KEYS: frozenset[str] = frozenset(
         "audit_retention_days",
         # LLM 분석은 결과 해석을 바꾸므로 변경 이력을 남긴다 (Harness §37).
         "enable_llm_analysis",
+        # QA 는 상담원 평가에 쓰인다. 언제 켜고 껐는지가 남아야 한다 (Harness §37).
+        "enable_qa",
+        "qa_auto_run",
+        # 마이크 접근을 여는 결정이다. 언제 켜고 껐는지가 남아야 한다 (Harness §37).
+        "enable_realtime_stt",
         "llm_model_name",
     }
 )
@@ -114,7 +119,11 @@ class Settings(BaseSettings):
     temp_dir: Path = Path("./data/tmp")
 
     # --- STT 엔진 (Harness §5.2) --------------------------------------------
-    stt_engine: Literal["faster-whisper", "mock"] = "faster-whisper"
+    #   faster-whisper : 로컬 모델로 전사한다. 음성이 사내를 벗어나지 않는다
+    #   groq-whisper   : Groq 등 OpenAI 호환 전사 API 를 호출한다.
+    #                    **음성 원본이 외부로 나간다** — ALLOW_EXTERNAL_STT 승인 필요
+    #   mock           : 테스트용. prod 선택 시 기동 거부
+    stt_engine: Literal["faster-whisper", "groq-whisper", "mock"] = "faster-whisper"
     stt_model_name: str = "medium"
     stt_model_path: str = ""
     stt_device: Literal["cpu", "cuda", "auto"] = "cpu"
@@ -124,6 +133,25 @@ class Settings(BaseSettings):
     stt_vad_enabled: bool = True
     stt_cpu_threads: Annotated[int, Field(ge=0, le=128)] = 4
     stt_allow_model_download: bool = False
+
+    # --- 외부 전사 API (STT_ENGINE=groq-whisper) -----------------------------
+    #
+    # 로컬 엔진과 결정적으로 다른 점은 **음성 원본 자체가 사내 경계를 벗어난다**는 것이다.
+    # 분석(LLM)은 전사된 텍스트만 내보내지만 이쪽은 녹취 파일을 그대로 올린다. 그래서
+    # `ALLOW_EXTERNAL_LLM` 과 별개의 승인 플래그를 둔다 — 두 결정의 위험 크기가 다르다.
+    #
+    # 주소는 OpenAI 호환 전사 엔드포인트를 가리킨다. `/audio/transcriptions` 를 붙여 쓴다.
+    #   Groq   : https://api.groq.com/openai/v1  (모델 whisper-large-v3 등)
+    #   OpenAI : https://api.openai.com/v1       (모델 whisper-1 등)
+    stt_api_base_url: str = "https://api.groq.com/openai/v1"
+    # Bearer 토큰으로만 전달된다. 로그·응답·오류 메시지 어디에도 나가지 않는다 (§9 / §15).
+    stt_api_key: SecretStr = SecretStr("")
+    stt_api_timeout_seconds: Annotated[int, Field(ge=10, le=3600)] = 600
+    # 엔드포인트가 받아 주는 파일 크기 상한(MB). 넘는 파일은 호출하지 않고 즉시 거절한다.
+    # Groq 무료 등급 25MB / 유료 100MB, OpenAI 25MB (2026-09 기준).
+    stt_api_max_upload_mb: Annotated[int, Field(ge=1, le=5000)] = 25
+    # 음성 원본 외부 전송 승인. 켜기 전에 개인정보 영향평가와 위탁 계약이 선행되어야 한다.
+    allow_external_stt: bool = False
 
     # --- 자원 보호 (Harness §24) --------------------------------------------
     stt_max_upload_mb: Annotated[int, Field(ge=1, le=5000)] = 500
@@ -156,6 +184,31 @@ class Settings(BaseSettings):
     # 범위 밖이고 분석만 구현되어 있다.
     enable_llm_analysis: bool = False
 
+    # --- 상담 품질 평가 (QA) ---
+    #
+    # 분석과 같은 Provider 를 쓰지만 호출은 별개다. 켜면 상담당 LLM 호출이 2회로 늘어난다.
+    # `qa_auto_run` 이 꺼져 있으면 화면의 버튼으로만 평가한다 — 전체 상담을 다 평가할
+    # 필요는 없고, 표본만 보는 운영도 흔하다.
+    enable_qa: bool = False
+    qa_auto_run: bool = False
+
+    # --- 실시간 STT (Harness §8.1 / §24 / §54) ---
+    #
+    # 마이크 입력을 WebSocket 으로 받아 조각 단위로 전사한다. **진짜 스트리밍 ASR 이
+    # 아니다** — 일정 길이로 잘라 배치 엔진에 넣는 준실시간 방식이며, 그래서 조각 경계에서
+    # 문맥이 끊긴다. 이 한계를 감춘 채 "실시간"이라고만 부르면 결과 품질을 오해하게 된다.
+    #
+    # 켜면 브라우저 마이크 권한(Permissions-Policy)이 이 출처에 열린다. 그래서 기본은
+    # 꺼짐이고, 켜는 것이 명시적 결정이 되게 한다.
+    enable_realtime_stt: bool = False
+    # 조각 길이. 짧을수록 화면에 빨리 뜨지만 문맥이 더 자주 끊기고 호출 횟수가 늘어난다.
+    # 외부 API 를 쓰면 이 값이 곧 호출 빈도이자 비용이다.
+    realtime_segment_seconds: Annotated[int, Field(ge=2, le=60)] = 6
+    # 한 세션의 최대 길이. 잊고 켜 둔 탭이 자원을 계속 먹는 것을 막는다 (Harness §24).
+    realtime_max_session_seconds: Annotated[int, Field(ge=30, le=14400)] = 1800
+    # 동시 세션 수. 세션마다 전사가 돌므로 워커 자원과 직결된다.
+    realtime_max_sessions: Annotated[int, Field(ge=1, le=64)] = 4
+
     # --- JSON 연동 (외부 시스템 통합용) ---
     #
     # multipart 를 쓰기 어려운 클라이언트(레거시 ESB, 일부 RPA 등)를 위한 경로다.
@@ -177,8 +230,9 @@ class Settings(BaseSettings):
     #   ollama            : Ollama 고유 API (/api/chat)
     #   openai-compatible : OpenAI 형식 /chat/completions 를 말하는 모든 엔드포인트
     #                       (OpenAI, Groq, vLLM, LM Studio, Ollama 의 /v1 등)
+    #   openrouter        : OpenRouter 경유. GLM 등 추론 모델의 응답 특성을 함께 다룬다
     #   mock              : 테스트용. prod 선택 시 기동 거부
-    llm_provider: Literal["ollama", "openai-compatible", "mock"] = "ollama"
+    llm_provider: Literal["ollama", "openai-compatible", "openrouter", "mock"] = "ollama"
     llm_base_url: str = "http://127.0.0.1:11434"
     llm_model_name: str = "gemma3:latest"
     # Bearer 토큰으로 전달된다. 로그·응답·오류 메시지 어디에도 나가지 않는다 (§9 / §15).
@@ -187,6 +241,18 @@ class Settings(BaseSettings):
     #   json_schema : 스키마를 그대로 강제한다. 지원하면 이쪽이 낫다
     #   json_object : JSON 이라는 것만 강제한다. 구형 엔드포인트 대비
     llm_json_mode: Literal["json_schema", "json_object"] = "json_schema"
+
+    # --- 추론(reasoning) 모델 대응 (LLM_PROVIDER=openrouter) ---
+    #
+    # OpenRouter 는 OpenAI 호환이지만, GLM 같은 추론 모델을 라우팅하면 두 가지가 달라진다.
+    #   * 추론 토큰이 max_tokens 를 함께 소비한다. 낮게 잡으면 본문이 비거나 잘린다.
+    #   * 응답에 코드펜스나 앞뒤 설명이 섞여 나오는 모델이 있다 (Provider 가 걷어낸다).
+    llm_max_output_tokens: Annotated[int, Field(ge=256, le=200000)] = 32768
+    # 빈 값이면 모델 기본값을 쓴다. 낮출수록 빠르고 싸지만 분석 품질이 떨어진다.
+    llm_reasoning_effort: Literal["", "low", "medium", "high"] = ""
+    # OpenRouter 순위표 노출용 선택 헤더. 값이 없으면 헤더 자체를 보내지 않는다.
+    llm_app_name: str = ""
+    llm_site_url: str = ""
     llm_timeout_seconds: Annotated[int, Field(ge=10, le=3600)] = 300
     # 프롬프트에 실어 보낼 Transcript 길이 상한. 넘으면 잘라 보내고 그 사실을 기록한다.
     llm_max_transcript_chars: Annotated[int, Field(ge=1000, le=200000)] = 20000
@@ -322,6 +388,49 @@ class Settings(BaseSettings):
                 "요약·분류가 필요하면 ENABLE_LLM_ANALYSIS 를 쓴다."
             )
 
+        if self.stt_engine == "groq-whisper":
+            # 음성 원본이 사내를 벗어난다. 설정 실수로 그렇게 되는 일은 없어야 한다 (SEC-021).
+            if not self.allow_external_stt:
+                raise ConfigurationError(
+                    "STT_ENGINE='groq-whisper' 는 음성 원본을 외부 API 로 전송한다. "
+                    "ALLOW_EXTERNAL_STT=true 로 명시 승인해야 한다 (Harness §8.2)"
+                )
+            if not self.stt_api_key.get_secret_value().strip():
+                # 키 없이 떠 있다가 첫 전사에서 401 로 드러나는 것보다 낫다 (Harness §4.3).
+                raise ConfigurationError(
+                    "STT_ENGINE='groq-whisper' 이면 STT_API_KEY 를 지정해야 한다"
+                )
+            if not self.stt_api_base_url.strip():
+                raise ConfigurationError(
+                    "STT_ENGINE='groq-whisper' 이면 STT_API_BASE_URL 을 지정해야 한다"
+                )
+            if self.stt_api_base_url.startswith("http://") and not _is_local_url(
+                self.stt_api_base_url
+            ):
+                # 평문 구간을 지나면 녹취 음성이 그대로 노출된다 (Harness §8.2).
+                raise ConfigurationError(
+                    "외부 STT_API_BASE_URL 은 https 여야 한다. 평문 http 로는 음성을 보내지 않는다"
+                )
+
+        if self.enable_realtime_stt and self.stt_engine == "mock" and self.is_production:
+            # 실시간 화면에 가짜 전사가 흐르는 것은 조용한 실패 중 최악이다 (§4.3 / §35).
+            raise ConfigurationError(
+                "prod 환경에서 실시간 STT 와 STT_ENGINE='mock' 을 함께 쓸 수 없다"
+            )
+
+        if self.enable_qa and not self.enable_llm_analysis:
+            # QA 는 분석과 같은 LLM Provider 를 쓴다. 분석이 꺼진 채로 QA 만 켜면
+            # Provider 설정 검증(주소·키·외부 승인)을 건너뛴 채 외부 호출이 나간다.
+            raise ConfigurationError(
+                "ENABLE_QA=true 는 ENABLE_LLM_ANALYSIS=true 를 전제로 한다. "
+                "QA 는 분석과 같은 LLM 설정을 쓴다"
+            )
+
+        if self.qa_auto_run and not self.enable_qa:
+            raise ConfigurationError(
+                "QA_AUTO_RUN=true 이면 ENABLE_QA=true 여야 한다"
+            )
+
         if self.enable_llm_analysis and self.llm_provider == "mock" and self.is_production:
             # 가짜 분석 결과가 운영 화면에 표시되는 것은 조용한 실패 중 최악이다 (§4.3).
             raise ConfigurationError(
@@ -336,6 +445,17 @@ class Settings(BaseSettings):
         if self.enable_llm_analysis and not self.llm_model_name.strip():
             raise ConfigurationError(
                 "ENABLE_LLM_ANALYSIS=true 이면 LLM_MODEL_NAME 을 지정해야 한다"
+            )
+
+        if (
+            self.enable_llm_analysis
+            and self.llm_provider == "openrouter"
+            and not self.llm_api_key.get_secret_value().strip()
+        ):
+            # 키 없이 기동하면 첫 분석에서야 401 로 드러난다. 기동 시점에 막는다 (§4.3).
+            raise ConfigurationError(
+                "LLM_PROVIDER='openrouter' 이면 LLM_API_KEY 를 지정해야 한다. "
+                "키는 OpenRouter 대시보드에서 발급한다"
             )
 
         if not self.allow_external_llm and self.llm_base_url and not _is_local_url(

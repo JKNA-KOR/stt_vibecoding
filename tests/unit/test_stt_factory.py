@@ -7,6 +7,7 @@ import pytest
 from app.core.config import ConfigurationError, Settings
 from app.stt.base import EngineDescription
 from app.stt.factory import create_engine, get_engine, reset_engine
+from app.stt.groq_whisper_engine import GroqWhisperEngine
 from app.stt.mock_engine import MockSTTEngine
 
 
@@ -70,3 +71,61 @@ def test_reset_engine_discards_instance(settings: Settings) -> None:
 
     assert first.is_loaded is False
     assert get_engine(settings) is not first
+
+
+# --- 외부 전사 API (Harness §8.2, SEC-021) ---------------------------------------
+#
+# 음성 원본이 사내를 벗어나는 결정이다. 설정 실수로 그렇게 되는 일은 없어야 한다.
+
+
+def _remote_settings(**overrides: object) -> Settings:
+    base: dict[str, object] = {
+        "app_env": "test",
+        "stt_engine": "groq-whisper",
+        "stt_api_key": "gsk-test-key",
+        "stt_model_name": "whisper-large-v3",
+        "allow_external_stt": True,
+        "session_secret": "test-session-secret-value-at-least-32-chars",
+    }
+    base.update(overrides)
+    return Settings(**base)
+
+
+def test_remote_engine_is_selected_by_config() -> None:
+    """새 엔진을 붙이는 데 상위 계층 수정이 필요 없어야 한다 (NFR-002)."""
+    engine = create_engine(_remote_settings())
+
+    assert isinstance(engine, GroqWhisperEngine)
+    assert engine.is_loaded is False
+
+
+def test_remote_engine_needs_explicit_approval_to_send_audio_outside() -> None:
+    with pytest.raises(ConfigurationError, match="ALLOW_EXTERNAL_STT"):
+        _remote_settings(allow_external_stt=False)
+
+
+def test_remote_engine_without_a_key_fails_at_startup() -> None:
+    """키 없이 떠 있다가 첫 전사에서 401 로 드러나는 것보다 낫다 (Harness §4.3)."""
+    with pytest.raises(ConfigurationError, match="STT_API_KEY"):
+        _remote_settings(stt_api_key="")
+
+
+def test_plaintext_http_endpoint_is_refused() -> None:
+    """평문 구간을 지나면 녹취 음성이 그대로 노출된다 (Harness §8.2)."""
+    with pytest.raises(ConfigurationError, match="https"):
+        _remote_settings(stt_api_base_url="http://api.example.com/v1")
+
+
+def test_local_http_endpoint_is_allowed() -> None:
+    """사내에 세운 호환 엔드포인트까지 막을 이유는 없다."""
+    settings = _remote_settings(stt_api_base_url="http://stt.internal:8000/v1")
+
+    assert isinstance(create_engine(settings), GroqWhisperEngine)
+
+
+def test_local_engine_is_unaffected_by_the_external_flag() -> None:
+    """기본값은 여전히 로컬이다. 음성은 사내를 벗어나지 않는다."""
+    settings = Settings(app_env="test", session_secret="t" * 40)
+
+    assert settings.stt_engine == "faster-whisper"
+    assert settings.allow_external_stt is False

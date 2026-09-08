@@ -10,6 +10,7 @@ Golden Regression 을 재실행해야 한다 (Harness §36, OPS-003).
 
 from __future__ import annotations
 
+import math
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -197,6 +198,9 @@ class FasterWhisperEngine(STTEngine):
                 vad_filter=options.vad_enabled,
                 condition_on_previous_text=_CONDITION_ON_PREVIOUS_TEXT,
                 word_timestamps=_WORD_TIMESTAMPS,
+                # 도메인 용어 힌트. 비어 있으면 넘기지 않는다 — 빈 문자열도 프롬프트로
+                # 취급하는 버전이 있어 결과가 달라질 수 있다 (Harness §36).
+                initial_prompt=options.vocabulary_hint or None,
             )
         except (OSError, ValueError, RuntimeError) as exc:
             raise self._to_domain_error(exc, stage="open") from exc
@@ -260,6 +264,7 @@ class FasterWhisperEngine(STTEngine):
                         start=start,
                         end=end,
                         text=str(raw.text).strip(),
+                        confidence=_confidence_of(raw),
                     )
                 )
                 if duration > 0:
@@ -282,6 +287,27 @@ class FasterWhisperEngine(STTEngine):
         if _is_decode_failure(exc):
             return AudioDecodeError(internal_detail=f"{stage}: {reason}: {exc}")
         return STTModelError(internal_detail=f"{stage}: {reason}: {exc}")
+
+
+def _confidence_of(raw: Any) -> float | None:
+    """세그먼트의 평균 로그확률을 0~1 확신도로 옮긴다.
+
+    `avg_logprob` 는 토큰당 평균 로그확률이므로 exp 를 취하면 "토큰 하나를 맞힐 평균
+    확률"에 해당한다. **정확도가 아니다** — 모델이 얼마나 확신했는지일 뿐이며, 확신에
+    차서 틀리는 경우도 있다 (Harness §20).
+
+    무음 구간에서 나오는 환각은 확신도가 높게 나오기도 하므로 `no_speech_prob` 만큼
+    깎는다. 값이 없으면 지어내지 않고 `None` 을 돌려준다.
+    """
+    avg_logprob = getattr(raw, "avg_logprob", None)
+    if not isinstance(avg_logprob, (int, float)):
+        return None
+
+    confidence = math.exp(float(avg_logprob))
+    no_speech = getattr(raw, "no_speech_prob", None)
+    if isinstance(no_speech, (int, float)):
+        confidence *= 1.0 - min(max(float(no_speech), 0.0), 1.0)
+    return round(min(max(confidence, 0.0), 1.0), 4)
 
 
 def _is_decode_failure(exc: Exception) -> bool:

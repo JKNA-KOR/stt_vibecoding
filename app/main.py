@@ -25,8 +25,11 @@ from app.api.routes import (
     analysis,
     auth,
     exports,
+    glossary,
     health,
     jobs,
+    qa,
+    realtime,
     transcripts,
 )
 from app.core.config import Settings, get_settings
@@ -39,7 +42,7 @@ from app.core.context import (
 )
 from app.core.exceptions import ApplicationError, ErrorCode
 from app.core.logging import configure_logging, get_logger
-from app.core.security import SECURITY_HEADERS
+from app.core.security import security_headers
 from app.storage.audio import AudioStore
 from app.storage.database import init_engine
 from app.storage.transcript import TranscriptStore
@@ -120,6 +123,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(jobs.router, prefix=API_PREFIX)
     app.include_router(transcripts.router, prefix=API_PREFIX)
     app.include_router(analysis.router, prefix=API_PREFIX)
+    app.include_router(glossary.router, prefix=API_PREFIX)
+    app.include_router(qa.job_router, prefix=API_PREFIX)
+    app.include_router(qa.router, prefix=API_PREFIX)
+    # WebSocket 이라 CSRF·Rate Limit 의존성이 걸리지 않는다. 검증은 라우트가 직접 한다.
+    app.include_router(realtime.router, prefix=API_PREFIX)
     app.include_router(exports.router, prefix=API_PREFIX)
     app.include_router(admin.router, prefix=API_PREFIX)
 
@@ -155,6 +163,9 @@ def _body_limit_bytes(request: Request, settings: Settings) -> int | None:
 
 
 def _register_middleware(app: FastAPI) -> None:
+    # 헤더는 설정에서 한 번만 만든다. 요청마다 다시 계산할 이유가 없다.
+    headers = security_headers(allow_microphone=app.state.settings.enable_realtime_stt)
+
     @app.middleware("http")
     async def request_context(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -176,7 +187,7 @@ def _register_middleware(app: FastAPI) -> None:
         response = await call_next(request)
 
         response.headers[REQUEST_ID_HEADER] = request_id
-        for header, value in SECURITY_HEADERS.items():
+        for header, value in headers.items():
             response.headers.setdefault(header, value)
         return response
 

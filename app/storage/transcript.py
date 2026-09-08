@@ -65,6 +65,8 @@ class TranscriptStore:
                     "start": segment.start,
                     "end": segment.end,
                     "text": segment.text,
+                    # 모델 확신도. 값을 주지 않는 엔진에서는 null 이다.
+                    "confidence": segment.confidence,
                 }
                 for segment in segments
             ],
@@ -114,6 +116,8 @@ class TranscriptStore:
                 start=float(item["start"]),
                 end=float(item["end"]),
                 text=str(item["text"]),
+                # 이 필드 이전에 쓰인 파일에는 값이 없다. 없으면 없는 대로 읽는다.
+                confidence=_optional_float(item.get("confidence")),
             )
             for item in payload.get("segments", [])
         ]
@@ -149,3 +153,10 @@ class TranscriptStore:
     def _resolve(self, relpath: str) -> Path:
         # DB 에 저장된 값이라도 경로 검증을 건너뛰지 않는다 (다층 방어, Harness §6).
         return resolve_within(self._root, relpath)
+
+
+def _optional_float(value: object) -> float | None:
+    """숫자면 float, 아니면 None. 구버전 파일과 손상된 값 모두 여기서 걸러진다."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)

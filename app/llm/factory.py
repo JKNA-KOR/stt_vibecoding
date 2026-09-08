@@ -14,6 +14,7 @@ from app.llm.base import LLMProvider
 from app.llm.mock_provider import MockLLMProvider
 from app.llm.ollama_provider import OllamaProvider
 from app.llm.openai_compatible_provider import OpenAICompatibleProvider
+from app.llm.openrouter_provider import OpenRouterProvider
 
 logger = get_logger(__name__)
 
@@ -21,6 +22,7 @@ logger = get_logger(__name__)
 _REGISTRY: dict[str, Callable[[Settings], LLMProvider]] = {
     OllamaProvider.provider_name: OllamaProvider,
     OpenAICompatibleProvider.provider_name: OpenAICompatibleProvider,
+    OpenRouterProvider.provider_name: OpenRouterProvider,
     MockLLMProvider.provider_name: lambda settings: MockLLMProvider(settings.llm_model_name),
 }
 

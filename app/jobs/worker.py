@@ -21,9 +21,12 @@ from app.audit.service import Actor, AuditService
 from app.core.config import Settings, get_settings
 from app.core.exceptions import ApplicationError, ErrorCode, NotFoundError
 from app.core.logging import get_logger
+from app.glossary.service import GlossaryService
 from app.jobs.state import JobStatus, assert_transition
 from app.llm.service import AnalysisService
 from app.llm.state import AnalysisStatus
+from app.qa.service import QAService
+from app.qa.state import QAStatus
 from app.storage.audio import AudioStore
 from app.storage.database import session_scope
 from app.storage.models import Job, Transcript, ensure_utc
@@ -160,6 +163,11 @@ def _run_pipeline(job_id: str, *, settings: Settings) -> None:
             language=job.language,
             beam_size=job.beam_size,
             vad_enabled=job.vad_enabled,
+            # 용어사전을 어휘 힌트로 넘긴다. 사전이 비어 있으면 빈 문자열이라 아무것도
+            # 넘어가지 않는다 — 기존 동작과 같아진다.
+            vocabulary_hint=GlossaryService(
+                session, settings=settings
+            ).transcription_hint(),
         )
 
     audio_path = audio_store.absolute_path(audio_relpath)
@@ -195,6 +203,12 @@ def _run_pipeline(job_id: str, *, settings: Settings) -> None:
         # 커밋이 끝난 뒤에 발행한다. 트랜잭션 안에서 보내면 롤백된 Job 에 대해
         # 분석 메시지만 남아 워커가 없는 결과를 찾게 된다.
         _enqueue_analysis(job_id, settings=settings)
+
+    if settings.enable_qa and settings.qa_auto_run:
+        # 분석과 나란히 발행한다. 분석 결과를 기다리지 않는 이유는, QA 는 녹취만 보고
+        # 매기는 점수라 분석 결과가 필요 없고, 순서를 걸면 분석 실패가 QA 까지 막기
+        # 때문이다 (Harness §4.3 — 한 기능의 실패가 다른 기능을 끌고 내려가지 않는다).
+        _enqueue_qa(job_id, settings=settings)
 
 
 def _enqueue_analysis(job_id: str, *, settings: Settings) -> None:
@@ -318,6 +332,8 @@ def _store_results(
     # Harness §30: RTF = 처리시간 / 음성 재생시간. 0 나눗셈을 피하고 없으면 남기지 않는다.
     if result.audio_duration_seconds > 0:
         job.real_time_factor = processing_seconds / result.audio_duration_seconds
+    # 확신도는 RAW 전사에서 나온다. 정규화는 텍스트만 다듬으므로 값이 달라지지 않는다.
+    job.transcription_confidence = result.mean_confidence
     # 실제로 사용된 엔진 정보로 갱신한다. 요청 시점 설정과 다를 수 있다 (Harness §20).
     job.engine = result.provenance.engine
     job.model_version = result.provenance.model_version
@@ -478,6 +494,23 @@ def _progress_logger(job_id: str) -> Callable[[float], None]:
     return report
 
 
+def _enqueue_qa(job_id: str, *, settings: Settings) -> None:
+    from app.jobs.queue import create_queue
+
+    try:
+        create_queue(settings).enqueue_qa(job_id)
+    except Exception as exc:  # noqa: BLE001 - QA 접수 실패가 전사 성공을 무효로 만들지 않는다
+        logger.exception(
+            "failed to enqueue qa evaluation; transcript is still available",
+            extra={"event": "QA_ENQUEUE_FAILED", "job_id": job_id,
+                   "reason": type(exc).__name__},
+        )
+        _mark_qa_failed(
+            job_id, settings=settings, code=ErrorCode.QUEUE_ERROR,
+            detail=type(exc).__name__,
+        )
+
+
 def execute_analysis(job_id: str, *, settings: Settings | None = None) -> None:
     """LLM 분석 하나를 끝까지 처리한다 (FR-T-010).
 
@@ -548,4 +581,71 @@ def _mark_analysis_skipped(job_id: str, *, settings: Settings) -> None:
     logger.info(
         "analysis skipped because the feature is disabled",
         extra={"event": "ANALYSIS_SKIPPED", "job_id": job_id},
+    )
+
+
+def execute_qa(job_id: str, *, settings: Settings | None = None) -> None:
+    """상담 품질 평가 하나를 끝까지 처리한다.
+
+    전사·분석과 마찬가지로 예외를 밖으로 던지지 않는다. 실패는 `qa_status` 와 Audit 에
+    기록되며, Job 은 COMPLETED 로 남는다 — 평가가 실패해도 전사 결과는 유효하다.
+    """
+    settings = settings or get_settings()
+
+    if not settings.enable_qa:
+        # 요청 시점에는 켜져 있었는데 그 사이 꺼졌을 수 있다. 실패와 구분해 기록한다.
+        _mark_qa_skipped(job_id, settings=settings)
+        return
+
+    try:
+        with session_scope() as session:
+            _qa_service(session, settings).run_evaluation(job_id)
+    except ApplicationError as exc:
+        logger.warning(
+            "qa evaluation failed",
+            extra={
+                "event": "QA_FAILED",
+                "job_id": job_id,
+                "error_code": exc.code.value,
+                "failure_detail": exc.internal_detail,
+            },
+        )
+        _mark_qa_failed(
+            job_id, settings=settings, code=exc.code, detail=exc.internal_detail or ""
+        )
+    except Exception as exc:  # noqa: BLE001 - 분류되지 않은 오류도 상태로 남겨야 한다
+        logger.exception(
+            "qa evaluation crashed",
+            extra={"event": "QA_CRASHED", "job_id": job_id, "reason": type(exc).__name__},
+        )
+        _mark_qa_failed(
+            job_id, settings=settings, code=ErrorCode.INTERNAL_ERROR,
+            detail=type(exc).__name__,
+        )
+
+
+def _qa_service(session: Session, settings: Settings) -> QAService:
+    return QAService(session, settings=settings, transcript_store=TranscriptStore(settings))
+
+
+def _mark_qa_failed(job_id: str, *, settings: Settings, code: ErrorCode, detail: str) -> None:
+    try:
+        with session_scope() as session:
+            _qa_service(session, settings).mark_failed(job_id, code.value, detail)
+    except Exception:  # noqa: BLE001 - 상태 기록 실패까지 예외를 올리면 원인이 가려진다
+        logger.exception(
+            "failed to record qa failure",
+            extra={"event": "QA_STATE_WRITE_FAILED", "job_id": job_id},
+        )
+
+
+def _mark_qa_skipped(job_id: str, *, settings: Settings) -> None:
+    with session_scope() as session:
+        job = JobRepository(session).get(job_id)
+        if job is None:
+            return
+        job.qa_status = QAStatus.SKIPPED
+    logger.info(
+        "qa skipped because the feature is disabled",
+        extra={"event": "QA_SKIPPED", "job_id": job_id},
     )

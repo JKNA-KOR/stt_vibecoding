@@ -7,28 +7,109 @@
   {# CSP 가 style-src 'self' 이므로 인라인 스타일을 쓸 수 없다. 전부 외부 파일이다. #}
   <link rel="stylesheet" href="/static/app.css">
 </head>
+{% import "_icons.html" as ui %}
 <body>
-  {% if username %}
-  <header class="topbar">
-    <a class="brand" href="/">STT 서비스</a>
-    <nav class="nav">
-      <a href="/">작업</a>
-      {% if can_admin or can_audit %}<a href="/admin">관리</a>{% endif %}
-    </nav>
-    <div class="who">
-      {# Jinja2 autoescape 가 켜져 있다. 사용자명은 신뢰할 수 없는 값으로 다룬다. #}
-      <span class="username">{{ username }}</span>
-      <span class="role-badge">{{ role }}</span>
-      <button type="button" id="logout-button" class="link-button">로그아웃</button>
-    </div>
-  </header>
-  {% endif %}
+{% if username %}
+<div class="app-shell">
 
-  <main class="content">
-    {# 전역 알림 영역. 메시지는 JS 가 textContent 로 넣는다 (FR-T-005). #}
-    <div id="notice" class="notice" hidden></div>
-    {% block content %}{% endblock %}
-  </main>
+  {# ---- 사이드바 ---------------------------------------------------------
+     메뉴 구성은 권한에 따라 달라진다. 다만 메뉴를 숨기는 것은 권한 제어가 아니며
+     (Harness §10), 각 화면과 API 가 같은 판단을 다시 한다. #}
+  <aside class="sidebar" id="sidebar">
+    <div class="side-brand">
+      <a class="brand" href="/">JB STT</a>
+      <p class="brand-sub">Speech Analytics</p>
+    </div>
+
+    <nav class="side-nav">
+      <p class="nav-group">상담 업무</p>
+      <a class="nav-item {% if page == 'jobs' %}active{% endif %}" href="/">
+        {{ ui.icon("dashboard") }} 상담 대시보드
+      </a>
+      {% if can_upload %}
+      <a class="nav-item" href="/#upload-panel">
+        {{ ui.icon("upload") }} 녹취 업로드
+      </a>
+      {% endif %}
+      <a class="nav-item {% if page == 'consultations' %}active{% endif %}"
+         href="/consultations">
+        {{ ui.icon("list") }} 상담 목록
+      </a>
+      <a class="nav-item {% if page == 'realtime' %}active{% endif %}" href="/realtime">
+        {{ ui.icon("mic") }} 실시간 전사
+      </a>
+      <a class="nav-item {% if page == 'glossary' %}active{% endif %}" href="/glossary">
+        {{ ui.icon("book") }} 용어사전
+      </a>
+
+      <p class="nav-group">품질 관리 (QA)</p>
+      <a class="nav-item {% if page == 'qa' %}active{% endif %}" href="/qa">
+        {{ ui.icon("shield") }} QA 개요
+      </a>
+      <a class="nav-item {% if page == 'qa_scores' %}active{% endif %}" href="/qa/scores">
+        {{ ui.icon("gauge") }} 상담 점수
+      </a>
+      <a class="nav-item {% if page == 'qa_compliance' %}active{% endif %}"
+         href="/qa/compliance">
+        {{ ui.icon("alert") }} 컴플라이언스
+      </a>
+
+      {% if can_admin or can_audit %}
+      <p class="nav-group">운영</p>
+      {% if can_admin %}
+      <a class="nav-item {% if page == 'admin' %}active{% endif %}" href="/admin">
+        {{ ui.icon("settings") }} 시스템 관리
+      </a>
+      {% endif %}
+      {% if can_audit %}
+      <a class="nav-item {% if page == 'admin' and not can_admin %}active{% endif %}"
+         href="/admin#audit-panel">
+        {{ ui.icon("audit") }} 감사 로그
+      </a>
+      {% endif %}
+      {% endif %}
+    </nav>
+
+    <div class="side-foot">
+      <div class="side-user">
+        {# Jinja2 autoescape 가 켜져 있다. 사용자명은 신뢰할 수 없는 값으로 다룬다. #}
+        <span class="avatar">{{ username[0] }}</span>
+        <span class="side-user-body">
+          <span class="username">{{ username }}</span>
+          <span class="role-badge">{{ role }}</span>
+        </span>
+      </div>
+      <button type="button" id="logout-button" class="logout">
+        {{ ui.icon("logout") }} 로그아웃
+      </button>
+    </div>
+  </aside>
+
+  {# ---- 작업 영역 -------------------------------------------------------- #}
+  <div class="workspace">
+    <header class="topbar">
+      <button type="button" class="icon-button" id="sidebar-toggle" aria-label="메뉴 열기">
+        {{ ui.icon("menu") }}
+      </button>
+      {# 각 화면이 최상단에서 page_icon 을 set 한다. #}
+      <span class="page-icon">{{ ui.icon(page_icon | default("dashboard")) }}</span>
+      <div class="page-heading">
+        <h1>{% block page_title %}STT 서비스{% endblock %}</h1>
+        <p>{% block page_subtitle %}{% endblock %}</p>
+      </div>
+      <div class="topbar-tools">{% block topbar_tools %}{% endblock %}</div>
+    </header>
+
+    <main class="content">
+      {# 전역 알림 영역. 메시지는 JS 가 textContent 로 넣는다 (FR-T-005). #}
+      <div id="notice" class="notice" hidden></div>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+{% else %}
+{% block anonymous %}{% endblock %}
+{% endif %}
 
   <script src="/static/app.js"></script>
   {% block scripts %}{% endblock %}

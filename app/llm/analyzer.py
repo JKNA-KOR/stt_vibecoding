@@ -48,11 +48,18 @@ class TranscriptAnalyzer:
     """Transcript 하나를 분석한다."""
 
     def __init__(
-        self, provider: LLMProvider, *, settings: Settings, prompt_template: str
+        self,
+        provider: LLMProvider,
+        *,
+        settings: Settings,
+        prompt_template: str,
+        glossary: str = "",
     ) -> None:
         self._provider = provider
         self._settings = settings
         self._prompt = prompt_template
+        # 용어 설명은 지시문 쪽에 붙는다. 녹취(DATA)와 섞지 않는다 (Harness §13).
+        self._glossary = glossary
 
     def analyze(self, segments: list[TranscriptSegment]) -> AnalysisOutcome:
         """세그먼트를 이어 붙여 분석한다.
@@ -63,7 +70,7 @@ class TranscriptAnalyzer:
         prepared = self._prepare(segments)
 
         response = self._provider.complete_json(
-            system_prompt=self._prompt,
+            system_prompt=_with_glossary(self._prompt, self._glossary),
             user_content=USER_CONTENT_TEMPLATE.format(transcript=prepared.text),
             json_schema=analysis_json_schema(),
             timeout_seconds=float(self._settings.llm_timeout_seconds),
@@ -106,6 +113,22 @@ class TranscriptAnalyzer:
             },
         )
         return _Prepared(text=text[:limit], truncated=True)
+
+
+def _with_glossary(prompt: str, glossary: str) -> str:
+    """지시문에 용어 설명을 덧붙인다.
+
+    태그로 감싸는 이유는 프롬프트의 다른 부분과 경계를 분명히 하기 위해서다. 용어는
+    관리자가 넣은 값이라 녹취보다는 신뢰할 수 있지만, 그래도 지시문과 한 덩어리로
+    섞지 않는다 (Harness §13).
+    """
+    if not glossary.strip():
+        return prompt
+    return (
+        f"{prompt}\n\n"
+        "다음은 이 업무에서 쓰는 용어다. 녹취에 나오면 이 뜻으로 해석한다.\n"
+        f"<glossary>\n{glossary.strip()}\n</glossary>"
+    )
 
 
 def _coerce(raw: dict) -> tuple[AnalysisContent, list[str]]:

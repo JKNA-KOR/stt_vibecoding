@@ -23,6 +23,7 @@ logger = get_logger(__name__)
 # 워커가 등록하는 태스크 이름. 워커 쪽 `@celery_app.task(name=...)` 와 반드시 일치해야 한다.
 STT_TASK_NAME = "app.jobs.worker.run_stt_job"
 ANALYSIS_TASK_NAME = "app.jobs.worker.run_analysis_job"
+QA_TASK_NAME = "app.jobs.worker.run_qa_job"
 
 # 전용 큐를 쓴다. 다른 종류의 작업과 섞이면 STT 동시 실행 수 제한이 무의미해진다.
 STT_QUEUE_NAME = "stt"
@@ -45,6 +46,16 @@ class JobQueue(ABC):
 
         전사와 같은 큐를 쓴다. 분석은 전사가 끝난 뒤에만 돌고 빈도도 낮아, 큐를
         나누면 동시 실행 수 제한만 두 벌이 되고 얻는 것이 없다 (Harness §24).
+
+        Raises:
+            QueueError: 큐에 접수하지 못한 경우.
+        """
+
+    @abstractmethod
+    def enqueue_qa(self, job_id: str) -> None:
+        """QA 평가를 큐에 넣는다.
+
+        분석과 같은 큐를 쓴다. 나누면 동시 실행 수 제한만 두 벌이 되고 얻는 것이 없다.
 
         Raises:
             QueueError: 큐에 접수하지 못한 경우.
@@ -78,11 +89,14 @@ class InlineJobQueue(JobQueue):
         self,
         runner: Callable[[str], None],
         analysis_runner: Callable[[str], None] | None = None,
+        qa_runner: Callable[[str], None] | None = None,
     ) -> None:
         self._runner = runner
         self._analysis_runner = analysis_runner
+        self._qa_runner = qa_runner
         self.enqueued: list[str] = []
         self.analysis_enqueued: list[str] = []
+        self.qa_enqueued: list[str] = []
 
     def enqueue(self, job_id: str) -> None:
         self.enqueued.append(job_id)
@@ -93,6 +107,12 @@ class InlineJobQueue(JobQueue):
             raise QueueError(internal_detail="inline queue has no analysis runner")
         self.analysis_enqueued.append(job_id)
         self._analysis_runner(job_id)
+
+    def enqueue_qa(self, job_id: str) -> None:
+        if self._qa_runner is None:
+            raise QueueError(internal_detail="inline queue has no qa runner")
+        self.qa_enqueued.append(job_id)
+        self._qa_runner(job_id)
 
     def depth(self) -> int:
         # 즉시 실행하므로 대기 중인 메시지가 존재하지 않는다.
@@ -140,6 +160,9 @@ class CeleryJobQueue(JobQueue):
 
     def enqueue_analysis(self, job_id: str) -> None:
         self._send(ANALYSIS_TASK_NAME, job_id)
+
+    def enqueue_qa(self, job_id: str) -> None:
+        self._send(QA_TASK_NAME, job_id)
 
     def depth(self) -> int:
         """브로커 큐 길이. Redis 리스트 길이로 읽는다.
@@ -227,6 +250,7 @@ def create_queue(
     *,
     runner: Callable[[str], None] | None = None,
     analysis_runner: Callable[[str], None] | None = None,
+    qa_runner: Callable[[str], None] | None = None,
 ) -> JobQueue:
     """설정(`QUEUE_BACKEND`)에 맞는 큐 구현을 만든다.
 
@@ -237,11 +261,13 @@ def create_queue(
     Args:
         runner: Inline 구현이 호출할 전사 실행 함수. 생략하면 워커를 지연 임포트한다.
         analysis_runner: Inline 구현이 호출할 분석 실행 함수. 생략 시 동일.
+        qa_runner: Inline 구현이 호출할 QA 평가 실행 함수. 생략 시 동일.
     """
     if settings.queue_backend == "inline":
         return InlineJobQueue(
             runner or _default_runner(settings),
             analysis_runner or _default_analysis_runner(settings),
+            qa_runner or _default_qa_runner(settings),
         )
     return CeleryJobQueue(settings)
 
@@ -269,5 +295,16 @@ def _default_analysis_runner(settings: Settings) -> Callable[[str], None]:
         from app.jobs.worker import execute_analysis
 
         execute_analysis(job_id, settings=settings)
+
+    return run
+
+
+def _default_qa_runner(settings: Settings) -> Callable[[str], None]:
+    """Inline 큐의 기본 QA 실행자. `_default_runner` 와 같은 이유로 설정을 명시한다."""
+
+    def run(job_id: str) -> None:
+        from app.jobs.worker import execute_qa
+
+        execute_qa(job_id, settings=settings)
 
     return run

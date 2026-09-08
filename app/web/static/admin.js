@@ -223,3 +223,156 @@ document.addEventListener("DOMContentLoaded", () => {
   loadUsers();
   loadConfigHistory();
 });
+
+/* --- QA 기준 관리 (FR-M-004) -----------------------------------------------
+ *
+ * 프롬프트 편집과 같은 런타임 설정 경로를 쓴다. 그래서 변경 사유와 이력이 자동으로 남는다.
+ *
+ * 파일 업로드는 **브라우저 안에서만** 일어난다. 서버로 파일을 올리지 않고 FileReader 로
+ * 읽어 편집기를 채울 뿐이다 — 업로드 경로를 새로 만들면 검증·보관·정리를 다 떠안게 되는데,
+ * 여기서 필요한 것은 텍스트 한 덩어리뿐이다 (Harness §6).
+ */
+
+const QA_RUBRIC_KEY = "qa_consultation_rubric";
+const QA_COMPLIANCE_KEY = "qa_compliance_rules";
+
+// 편집기에 넣을 파일 크기 상한. 설정 값 자체의 상한(20000자)보다 넉넉하게 잡되,
+// 브라우저가 수십 MB 를 읽다 멈추는 일은 막는다.
+const RUBRIC_FILE_MAX_BYTES = 256 * 1024;
+
+const rubricProfiles = new Map();
+
+async function loadRubricProfiles() {
+  const select = document.getElementById("rubric-profile");
+  if (!select) return;
+  try {
+    const payload = await request("/admin/qa/rubric-profiles");
+    select.replaceChildren();
+    rubricProfiles.clear();
+
+    for (const profile of payload.items) {
+      rubricProfiles.set(profile.key, profile);
+      const option = document.createElement("option");
+      option.value = profile.key;
+      option.textContent = profile.label;
+      select.appendChild(option);
+    }
+    showProfileHint();
+  } catch (error) {
+    notifyError(error);
+  }
+}
+
+function showProfileHint() {
+  const select = document.getElementById("rubric-profile");
+  const profile = rubricProfiles.get(select.value);
+  document.getElementById("rubric-profile-hint").textContent = profile
+    ? profile.description
+    : "";
+}
+
+function applyProfile() {
+  const profile = rubricProfiles.get(document.getElementById("rubric-profile").value);
+  if (!profile) return;
+  document.getElementById("rubric-text").value = profile.rubric;
+  document.getElementById("compliance-text").value = profile.compliance;
+  notify("기본 원칙을 편집기에 불러왔습니다. 저장해야 반영됩니다.", "success");
+}
+
+async function loadRubrics() {
+  const box = document.getElementById("rubric-text");
+  if (!box) return;
+  try {
+    const [rubric, compliance] = await Promise.all([
+      request(`/admin/config/${QA_RUBRIC_KEY}`),
+      request(`/admin/config/${QA_COMPLIANCE_KEY}`),
+    ]);
+    box.value = rubric.value;
+    document.getElementById("compliance-text").value = compliance.value;
+  } catch (error) {
+    notifyError(error);
+  }
+}
+
+async function saveRubrics() {
+  const reason = document.getElementById("rubric-reason").value.trim();
+  if (!reason) {
+    notify("변경 사유를 입력해 주세요.", "error");
+    return;
+  }
+  try {
+    // 두 기준은 한 벌로 다뤄진다. 하나만 바뀌어도 같은 사유로 함께 기록한다.
+    await request(`/admin/config/${QA_RUBRIC_KEY}`, {
+      method: "PUT",
+      json: { value: document.getElementById("rubric-text").value, reason },
+    });
+    await request(`/admin/config/${QA_COMPLIANCE_KEY}`, {
+      method: "PUT",
+      json: { value: document.getElementById("compliance-text").value, reason },
+    });
+    notify("QA 기준을 저장했습니다. 다음 평가부터 반영됩니다.", "success");
+    document.getElementById("rubric-reason").value = "";
+    await loadConfigHistory();
+  } catch (error) {
+    notifyError(error);
+  }
+}
+
+async function resetRubrics() {
+  if (!window.confirm("QA 기준을 코드 기본값으로 되돌릴까요?")) return;
+  try {
+    await request(`/admin/config/${QA_RUBRIC_KEY}`, { method: "DELETE" });
+    await request(`/admin/config/${QA_COMPLIANCE_KEY}`, { method: "DELETE" });
+    notify("기본값으로 복원했습니다.", "success");
+    await loadRubrics();
+    await loadConfigHistory();
+  } catch (error) {
+    notifyError(error);
+  }
+}
+
+/** 파일을 읽어 편집기를 채운다. 서버로 보내지 않는다. */
+function wireRubricFile(inputId, targetId) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+
+  input.addEventListener("change", () => {
+    const file = input.files[0];
+    if (!file) return;
+
+    if (file.size > RUBRIC_FILE_MAX_BYTES) {
+      notify("파일이 너무 큽니다. 256KB 이하의 텍스트 파일만 불러올 수 있습니다.", "error");
+      input.value = "";
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      // 파일 내용은 신뢰할 수 없는 텍스트다. value 로만 넣는다 (Harness §13).
+      document.getElementById(targetId).value = String(reader.result || "");
+      notify("파일을 편집기에 불러왔습니다. 저장해야 반영됩니다.", "success");
+      input.value = "";
+    });
+    reader.addEventListener("error", () => {
+      notify("파일을 읽지 못했습니다.", "error");
+      input.value = "";
+    });
+    reader.readAsText(file, "utf-8");
+  });
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const root = document.getElementById("admin-root");
+  if (root.dataset.canAdmin !== "true") return;
+  if (!document.getElementById("rubric-text")) return;
+
+  document.getElementById("rubric-profile").addEventListener("change", showProfileHint);
+  document.getElementById("rubric-load").addEventListener("click", applyProfile);
+  document.getElementById("rubric-save").addEventListener("click", saveRubrics);
+  document.getElementById("rubric-reset").addEventListener("click", resetRubrics);
+  wireRubricFile("rubric-file", "rubric-text");
+  wireRubricFile("compliance-file", "compliance-text");
+
+  loadRubricProfiles();
+  loadRubrics();
+});
