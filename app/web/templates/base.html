@@ -60,6 +60,10 @@
       <a class="nav-item {% if page == 'admin' %}active{% endif %}" href="/admin">
         {{ ui.icon("settings") }} 시스템 관리
       </a>
+      <a class="nav-item nav-sub {% if page == 'integration' %}active{% endif %}"
+         href="/admin/integration">
+        {{ ui.icon("plug") }} 연동 인터페이스
+      </a>
       {% endif %}
       {% if can_audit %}
       <a class="nav-item {% if page == 'admin' and not can_admin %}active{% endif %}"

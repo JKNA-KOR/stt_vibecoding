@@ -153,8 +153,14 @@ function renderSegments(payload) {
     item.appendChild(
       el("span", "segment-time", `${formatDuration(segment.start)} – ${formatDuration(segment.end)}`),
     );
+    // 화자는 문맥 추정값이다. 없으면 자리를 만들지 않는다.
+    const text = el("span", "segment-text");
+    if (segment.speaker) {
+      text.appendChild(el("span", "speaker speaker-" + speakerClass(segment.speaker), segment.speaker));
+    }
     // 본문은 반드시 textContent 로만 넣는다.
-    item.appendChild(el("span", "segment-text", segment.text));
+    text.appendChild(el("span", "segment-body", segment.text));
+    item.appendChild(text);
     list.appendChild(item);
   }
 
@@ -210,6 +216,17 @@ async function loadLineage() {
     const parts = rows.map(
       (row) => `${row.kind}: ${row.processor} ${row.processor_version} (${row.segment_count}개 구간)`,
     );
+
+    // 신뢰도 필터로 빠진 구간이 있으면 알린다. 조용히 지우면 "왜 이 말이 없지"가 된다.
+    const raw = rows.find((row) => row.kind === "RAW");
+    const normalized = rows.find((row) => row.kind === "NORMALIZED");
+    if (raw && normalized && raw.segment_count > normalized.segment_count) {
+      parts.push(
+        `구간 ${raw.segment_count - normalized.segment_count}개가 정규화에서 제외됨 ` +
+          `(무음·중복·저신뢰도). 원본은 '원본' 에서 볼 수 있습니다`,
+      );
+    }
+
     // Harness §51 의 계보를 화면에도 드러낸다.
     document.getElementById("lineage-hint").textContent = parts.join(" · ");
   } catch {

@@ -27,10 +27,14 @@ from app.auth.roles import Permission, UserRole
 from app.core.config import Settings
 from app.core.exceptions import NotFoundError, ValidationError
 from app.core.runtime_config import EDITABLE_KEYS, RuntimeConfigService
+from app.integration.ingest import IngestService
 from app.jobs.queue import create_queue
+from app.jobs.service import JobService
 from app.jobs.state import JobStatus
 from app.qa.rubrics import PROFILES
+from app.storage.audio import AudioStore
 from app.storage.models import AuditEvent, ConfigChange, Job, User
+from app.storage.transcript import TranscriptStore
 from app.stt.factory import get_engine
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -136,6 +140,92 @@ def list_config(
     """런타임에 바꿀 수 있는 설정 목록. 긴 값(프롬프트)은 잘려서 온다."""
     entries = RuntimeConfigService(session, settings=settings).list_all()
     return {"items": [asdict(entry) for entry in entries]}
+
+
+@router.get("/integration/status")
+def integration_status(
+    principal: Annotated[Principal, Depends(require_permission(Permission.ADMIN_MANAGE))],
+    session: Session = Depends(db_session),
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    """연동 설정과 연결 상태 (docs/INTERFACE.md).
+
+    **접속 주소는 보여주고 키는 보여주지 않는다.** 운영자가 "어디에 붙어 있는가"는
+    알아야 하지만, 화면에 키를 띄우면 어깨너머로 새어 나간다 (Harness §44).
+    """
+    ingest = IngestService(
+        session,
+        settings=settings,
+        jobs=JobService(
+            session,
+            settings=settings,
+            queue=create_queue(settings),
+            audio_store=AudioStore(settings),
+            transcript_store=TranscriptStore(settings),
+        ),
+    )
+    return {
+        "inbound": {
+            "source": settings.recording_source,
+            "ingest_username": settings.recording_ingest_username,
+            "batch_limit": settings.recording_batch_limit,
+            "inbox_dir": str(settings.recording_inbox_dir),
+            "api_base_url": settings.recording_api_base_url,
+            "has_api_key": bool(settings.recording_api_key.get_secret_value()),
+            "status": ingest.check(),
+        },
+        "outbound": {
+            "enabled": settings.outbound_enabled,
+            "url": settings.outbound_url,
+            "has_api_key": bool(settings.outbound_api_key.get_secret_value()),
+            "max_attempts": settings.outbound_max_attempts,
+            "include_transcript": settings.outbound_include_transcript,
+            "include_analysis": settings.outbound_include_analysis,
+            "include_qa": settings.outbound_include_qa,
+            "allow_external": settings.allow_external_outbound,
+        },
+        "engine": {
+            "stt_engine": settings.stt_engine,
+            "model_name": settings.stt_model_name,
+            "api_base_url": settings.stt_api_base_url,
+            "has_api_key": bool(settings.stt_api_key.get_secret_value()),
+            "allow_external": settings.allow_external_stt,
+        },
+    }
+
+
+@router.post("/integration/ingest")
+def run_ingest(
+    principal: Annotated[Principal, Depends(require_permission(Permission.ADMIN_MANAGE))],
+    session: Session = Depends(db_session),
+    settings: Settings = Depends(settings_dep),
+    _: Principal = Depends(csrf_protected),
+) -> dict[str, object]:
+    """녹취서버에서 지금 한 회차를 가져온다.
+
+    주기 실행이 아니라 사람이 누르는 경로다. 자동 수집은 운영 스케줄러(cron 등)가
+    같은 엔드포인트를 부르거나 `scripts/ingest_recordings.py` 를 돌리는 것으로 구성한다 —
+    앱 안에 스케줄러를 두면 API 를 여러 벌 띄웠을 때 같은 건을 여러 번 가져간다.
+    """
+    service = IngestService(
+        session,
+        settings=settings,
+        jobs=JobService(
+            session,
+            settings=settings,
+            queue=create_queue(settings),
+            audio_store=AudioStore(settings),
+            transcript_store=TranscriptStore(settings),
+        ),
+    )
+    result = service.run_once(requested_by=principal.username)
+    return {
+        "fetched": result.fetched,
+        "created": result.created,
+        "duplicated": result.duplicated,
+        "failed": result.failed,
+        "errors": result.errors[:20],
+    }
 
 
 @router.get("/qa/rubric-profiles")

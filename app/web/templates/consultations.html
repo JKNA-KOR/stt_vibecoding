@@ -3,27 +3,50 @@
 {% set page_icon = "list" %}
 {% block title %}상담 목록 · STT 서비스{% endblock %}
 {% block page_title %}상담 목록{% endblock %}
-{% block page_subtitle %}변환된 상담 스크립트를 한 화면에서 읽는다{% endblock %}
+{% block page_subtitle %}상담 상세 정보와 변환된 스크립트를 한 화면에서 본다{% endblock %}
 
 {% block topbar_tools %}
 <button type="button" id="consult-refresh">{{ ui.icon("refresh") }} 새로고침</button>
 {% endblock %}
 
 {% block content %}
-<div class="consult">
+<div class="consult consult-list-layout" id="consult-root" data-can-admin="{{ 'true' if can_admin else 'false' }}">
 
   {# ---- 왼쪽: 상담 목록 프레임 -------------------------------------------- #}
   <aside class="panel consult-list">
     <div class="panel-head">
       <h2 class="panel-title">{{ ui.icon("audio") }} 상담</h2>
-      <span class="hint-inline" id="consult-count"></span>
+      <div class="controls">
+        <span class="hint-inline" id="consult-count"></span>
+        {# 삭제는 되돌릴 수 없다. 관리자에게만 노출한다 — 다만 버튼을 숨기는 것은 권한
+           제어가 아니며 (Harness §10), 서버가 같은 판단을 다시 한다. #}
+        {% if can_admin %}
+        <button type="button" class="danger" id="consult-delete-mode">
+          {{ ui.icon("trash") }} 녹취 삭제
+        </button>
+        {% endif %}
+      </div>
     </div>
+
     <div class="panel-body">
       <label for="consult-search" class="sr-only">파일명 검색</label>
       <input type="text" id="consult-search" placeholder="파일명으로 찾기" maxlength="120">
+
+      {% if can_admin %}
+      <div class="controls select-bar" id="consult-select-bar" hidden>
+        <label class="checkbox">
+          <input type="checkbox" id="consult-select-all"> 전체 선택
+        </label>
+        <span class="hint-inline" id="consult-selected"></span>
+        <button type="button" class="danger" id="consult-delete" disabled>선택 삭제</button>
+        <button type="button" id="consult-delete-cancel">취소</button>
+      </div>
+      {% endif %}
     </div>
+
     <div class="consult-items" id="consult-items"></div>
     <p class="empty" id="consult-empty" hidden>전사가 끝난 상담이 없습니다.</p>
+
     <div class="panel-foot">
       <div class="pager">
         <button type="button" id="consult-prev" disabled>이전</button>
@@ -33,17 +56,30 @@
     </div>
   </aside>
 
-  {# ---- 오른쪽: 스크립트 프레임 -------------------------------------------- #}
+  {# ---- 오른쪽: 상세정보 + 스크립트 ---------------------------------------- #}
   <div>
+    {# 기본으로 보이는 것은 상세정보다. 캡션 재생은 눌러야 돈다. #}
+    <section class="panel" id="detail-panel">
+      <div class="panel-head">
+        <h2 class="panel-title">{{ ui.icon("list") }} <span id="detail-title">상담 상세정보</span></h2>
+        <a class="back-link" id="script-detail-link" href="/">전체 상세 열기</a>
+      </div>
+      <div class="panel-body">
+        <dl class="facts" id="consult-facts"></dl>
+        <p class="empty" id="detail-placeholder">왼쪽에서 상담을 고르면 정보가 표시됩니다.</p>
+      </div>
+    </section>
+
     <section class="panel" id="script-panel"
              data-can-download="{{ 'true' if can_download else 'false' }}">
       <div class="panel-head">
-        <h2 class="panel-title">{{ ui.icon("script") }} <span id="script-title">대화 스크립트</span></h2>
+        <h2 class="panel-title">{{ ui.icon("script") }} 대화 스크립트</h2>
         <div class="controls">
           <label for="script-kind" class="sr-only">결과 종류</label>
           <select id="script-kind">
             <option value="NORMALIZED">정규화</option>
             <option value="RAW">원본</option>
+            <option value="LLM_CORRECTED">보정본 (화자분리)</option>
           </select>
           <div class="download-group" id="script-download" hidden>
             <span class="hint-inline">다운로드</span>
@@ -53,7 +89,6 @@
             <a class="download" data-format="json" href="#">JSON</a>
           </div>
           <button type="button" id="script-caption">{{ ui.icon("activity") }} 캡션 재생</button>
-          <a class="back-link" id="script-detail-link" href="/">상세 열기</a>
         </div>
       </div>
       <div class="panel-body">
@@ -65,6 +100,30 @@
     </section>
   </div>
 </div>
+
+{% if can_admin %}
+{# ---- 삭제 확인 팝업 -----------------------------------------------------
+   되돌릴 수 없는 동작이므로 무엇이 사라지는지 목록으로 보여준 뒤 확인을 받는다 (§48). #}
+<div class="modal" id="delete-modal" hidden>
+  <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+    <div class="modal-head">
+      <h2 class="panel-title" id="delete-modal-title">{{ ui.icon("alert") }} 녹취 삭제 확인</h2>
+    </div>
+    <div class="modal-body">
+      <p class="hint" id="delete-modal-count"></p>
+      <ul class="delete-targets" id="delete-modal-list"></ul>
+      <p class="hint delete-warning">
+        음성 원본, 변환 결과, AI 분석, QA 평가가 함께 삭제되며 <strong>되돌릴 수 없습니다.</strong>
+        삭제 내역은 감사 로그에 기록됩니다.
+      </p>
+    </div>
+    <div class="modal-foot">
+      <button type="button" id="delete-modal-cancel">취소</button>
+      <button type="button" class="danger" id="delete-modal-confirm">확인 (삭제)</button>
+    </div>
+  </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}

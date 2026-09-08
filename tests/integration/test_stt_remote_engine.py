@@ -48,6 +48,8 @@ class _Recorder:
         self.status = 200
         self.payload: dict[str, Any] = dict(_RESPONSE)
         self.call_count = 0
+        # 엔드포인트가 돌려주는 오류 코드. 프롬프트 길이 초과 경로를 재현한다.
+        self.error_code = ""
 
     @property
     def text_body(self) -> str:
@@ -71,7 +73,8 @@ def stub() -> Iterator[tuple[str, _Recorder]]:
                 self.send_response(recorder.status)
                 self.end_headers()
                 # 일부 엔드포인트는 오류 본문에 요청 정보를 그대로 되비춘다.
-                self.wfile.write(json.dumps({"error": {"key": _KEY}}).encode())
+                body = {"error": {"key": _KEY, "code": recorder.error_code}}
+                self.wfile.write(json.dumps(body).encode())
                 return
 
             body = json.dumps(recorder.payload, ensure_ascii=False).encode()
@@ -323,3 +326,39 @@ def test_response_without_segments_keeps_the_text_in_one_piece(
 
     assert [segment.text for segment in result.segments] == ["전문만 왔다"]
     assert result.segments[0].start == 0.0
+
+
+def test_prompt_too_long_is_not_blamed_on_the_audio(
+    settings: Settings, stub, make_wav: Callable[..., Path]
+) -> None:
+    """설정이 원인인 400 을 파일 탓으로 돌리면 원인을 찾는 데 오래 걸린다.
+
+    용어사전 힌트가 길어 거절당한 경우가 그렇다. 음성은 멀쩡한데 전사가 실패하며,
+    AudioDecodeError 로 분류되면 "재시도해도 소용없는 파일 문제" 로 읽힌다.
+    """
+    base_url, recorder = stub
+    recorder.status = 400
+    recorder.error_code = "invalid_prompt"
+
+    with pytest.raises(STTModelError) as excinfo:
+        _engine(settings, base_url).transcribe(
+            make_wav(seconds=1.0), _options()
+        )
+
+    detail = excinfo.value.internal_detail or ""
+    assert "vocabulary hint" in detail
+    assert "HINT_MAX_BYTES" in detail
+    assert _KEY not in detail
+
+
+def test_other_400s_are_still_treated_as_audio_problems(
+    settings: Settings, stub, make_wav: Callable[..., Path]
+) -> None:
+    base_url, recorder = stub
+    recorder.status = 400
+    recorder.error_code = "invalid_file"
+
+    with pytest.raises(AudioDecodeError):
+        _engine(settings, base_url).transcribe(
+            make_wav(seconds=1.0), _options()
+        )

@@ -16,12 +16,20 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.jobs.queue import (
     ANALYSIS_TASK_NAME,
+    OUTBOUND_TASK_NAME,
     QA_TASK_NAME,
+    REFINE_TASK_NAME,
     STT_QUEUE_NAME,
     STT_TASK_NAME,
     create_celery_app,
 )
-from app.jobs.worker import execute_analysis, execute_job, execute_qa
+from app.jobs.worker import (
+    execute_analysis,
+    execute_job,
+    execute_outbound,
+    execute_qa,
+    execute_refine,
+)
 from app.storage.database import init_engine
 
 settings = get_settings()
@@ -61,3 +69,23 @@ def run_qa_job(job_id: str) -> None:
     없고, 둘 중 하나가 실패해도 다른 하나는 남아야 하기 때문이다 (Harness §4.3).
     """
     execute_qa(job_id)
+
+
+@celery_app.task(name=OUTBOUND_TASK_NAME, queue=STT_QUEUE_NAME, ignore_result=True)
+def run_outbound_job(job_id: str) -> None:
+    """전사·분석·QA 결과를 외부 솔루션으로 보낸다.
+
+    상대 시스템이 느리거나 멈춰 있을 수 있으므로 워커에서 돌린다. 송신 실패가 전사
+    결과를 무효로 만들지 않는다 (Harness §4.3).
+    """
+    execute_outbound(job_id)
+
+
+@celery_app.task(name=REFINE_TASK_NAME, queue=STT_QUEUE_NAME, ignore_result=True)
+def run_refine_job(job_id: str) -> None:
+    """전사 결과를 다듬고 화자를 붙인다.
+
+    원본(RAW / NORMALIZED)은 건드리지 않고 `LLM_CORRECTED` 를 한 벌 더 만든다.
+    후처리가 실패해도 기존 전사 결과는 그대로 쓸 수 있다 (Harness §50 / §4.3).
+    """
+    execute_refine(job_id)

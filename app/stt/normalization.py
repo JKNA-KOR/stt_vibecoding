@@ -16,12 +16,15 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from app.core.logging import get_logger
 from app.stt.schemas import TranscriptSegment
+
+logger = get_logger(__name__)
 
 NORMALIZER_NAME = "rule-based-normalizer"
 
 # 규칙이 바뀌면 반드시 증가시킨다 (Harness §20 / §36 / §51).
-NORMALIZER_VERSION = "1.0.0"
+NORMALIZER_VERSION = "1.1.0"
 
 # 제로폭 문자와 양방향 서식 제어문자. 눈에 보이지 않으면서 검색·비교를 어긋나게 하므로 제거한다.
 # 리터럴로 적으면 코드에서 보이지 않아 유지보수가 불가능하므로 코드포인트로 표기한다.
@@ -51,7 +54,9 @@ def normalize_text(raw: str) -> str:
     return text.strip()
 
 
-def normalize_segments(segments: list[TranscriptSegment]) -> list[TranscriptSegment]:
+def normalize_segments(
+    segments: list[TranscriptSegment], *, min_confidence: float = 0.0
+) -> list[TranscriptSegment]:
     """세그먼트 목록을 정규화한다.
 
     수행하는 것:
@@ -59,13 +64,25 @@ def normalize_segments(segments: list[TranscriptSegment]) -> list[TranscriptSegm
       * 빈 세그먼트 제거 후 인덱스 재부여
       * 시각 역전 보정 (`end < start` 인 경우 `end = start`)
       * 동일 텍스트가 연속 반복되는 구간 병합
+      * 신뢰도가 `min_confidence` 미만인 세그먼트 제거 (기본 꺼짐)
 
-    마지막 항목은 Whisper 계열의 반복 생성 실패 모드를 겨냥한 것으로, 완전히 동일한
-    텍스트가 바로 이어질 때만 적용하고 시각 범위는 병합해 보존한다. 원본이 필요하면
-    RAW Transcript 를 보면 된다 (Harness §50).
+    반복 병합은 Whisper 계열의 반복 생성 실패 모드를 겨냥한 것으로, 완전히 동일한
+    텍스트가 바로 이어질 때만 적용하고 시각 범위는 병합해 보존한다.
+
+    신뢰도 필터는 무음 구간 환각(`감사합니다`, `자막제공자` 등)을 겨냥한다. **발화를
+    지우는 동작이므로 기본값은 꺼짐이고**, 켜더라도 아래 두 가지 안전장치를 둔다.
+
+      * 신뢰도가 없는 세그먼트(값을 주지 않는 엔진)는 지우지 않는다 — 모른다고 버리면
+        해당 엔진의 전사가 통째로 사라진다.
+      * **전부 걸러지면 아무것도 지우지 않는다.** 음질이 나쁜 파일에서 빈 Transcript 가
+        나오면 "발화가 없었다" 로 보이는데, 그것은 사실과 다르고 문제를 감춘다 (§4.3).
+
+    어느 쪽이든 원본이 필요하면 RAW Transcript 를 보면 된다 (Harness §50).
     """
+    kept = drop_low_confidence(segments, min_confidence)
+
     cleaned: list[TranscriptSegment] = []
-    for segment in segments:
+    for segment in kept:
         text = normalize_text(segment.text)
         if not text:
             continue
@@ -84,9 +101,62 @@ def normalize_segments(segments: list[TranscriptSegment]) -> list[TranscriptSegm
             continue
 
         cleaned.append(
-            TranscriptSegment(index=len(cleaned), start=start, end=end, text=text)
+            TranscriptSegment(
+                index=len(cleaned),
+                start=start,
+                end=end,
+                text=text,
+                # 신뢰도와 화자는 정규화가 만들어 내는 값이 아니다. 그대로 옮긴다.
+                confidence=segment.confidence,
+                speaker=segment.speaker,
+            )
         )
     return cleaned
+
+
+def drop_low_confidence(
+    segments: list[TranscriptSegment], threshold: float
+) -> list[TranscriptSegment]:
+    """신뢰도가 낮은 세그먼트를 걸러 낸다.
+
+    무음 구간 환각은 신뢰도가 눈에 띄게 낮게 나온다 (실측: 정상 발화 0.82 / 환각 0.20).
+    그 차이를 이용해 걸러내되, 발화를 지우는 동작이므로 조심스럽게 다룬다.
+    """
+    if threshold <= 0:
+        return segments
+
+    kept = [
+        segment
+        for segment in segments
+        # 값을 주지 않는 엔진의 세그먼트는 판단할 근거가 없으므로 남긴다.
+        if segment.confidence is None or segment.confidence >= threshold
+    ]
+
+    if not kept:
+        # 전부 걸러졌다. 빈 Transcript 는 "발화가 없었다" 로 보이므로 더 나쁘다.
+        logger.warning(
+            "every segment fell below the confidence threshold; keeping all of them",
+            extra={
+                "event": "STT_CONFIDENCE_FILTER_SKIPPED",
+                "threshold": threshold,
+                "segment_count": len(segments),
+            },
+        )
+        return segments
+
+    dropped = len(segments) - len(kept)
+    if dropped:
+        # 몇 개를 왜 지웠는지 남긴다. 본문은 남기지 않는다 (Harness §15).
+        logger.info(
+            "dropped low-confidence segments",
+            extra={
+                "event": "STT_LOW_CONFIDENCE_DROPPED",
+                "threshold": threshold,
+                "dropped_count": dropped,
+                "kept_count": len(kept),
+            },
+        )
+    return kept
 
 
 def lineage_metadata(*, input_version: str) -> dict[str, object]:

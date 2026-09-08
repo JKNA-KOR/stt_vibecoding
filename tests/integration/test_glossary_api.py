@@ -20,7 +20,7 @@ from app.auth.roles import UserRole
 from app.auth.session import CSRF_HEADER_NAME
 from app.core.config import Settings
 from app.core.security import hash_password
-from app.glossary.service import HINT_MAX_CHARS
+from app.glossary.service import HINT_MAX_BYTES
 from app.main import API_PREFIX, create_app
 from app.storage.database import session_scope
 from app.storage.models import AuditEvent, User
@@ -181,10 +181,49 @@ def test_seed_loads_default_financial_terms(client: TestClient) -> None:
 
     added = client.post(f"{_GLOSSARY}/seed", headers={CSRF_HEADER_NAME: csrf}).json()
 
-    assert added["added"] > 0
-    terms = {item["term"] for item in client.get(_GLOSSARY, params={"limit": 500}).json()["items"]}
-    assert "중도상환수수료" in terms
-    assert "불완전판매" in terms
+    assert added["added"] >= 1000
+    assert client.get(_GLOSSARY, params={"limit": 1}).json()["page"]["total"] >= 1000
+
+    # 1000개를 한 페이지로 받지 않는다. 검색으로 확인한다.
+    for term in ("중도상환수수료", "불완전판매", "부장", "리볼빙"):
+        found = client.get(_GLOSSARY, params={"search": term}).json()
+        assert term in {item["term"] for item in found["items"]}, term
+
+
+def test_seed_includes_positions_and_titles(client: TestClient) -> None:
+    """상담에서 호칭으로 자주 나오고 짧아 오인식이 잦다."""
+    csrf = _login(client)
+    client.post(f"{_GLOSSARY}/seed", headers={CSRF_HEADER_NAME: csrf})
+
+    body = client.get(_GLOSSARY, params={"category": "직위", "limit": 500}).json()
+    positions = {item["term"] for item in body["items"]}
+    assert {"부장", "차장", "과장", "대리", "상무", "전무", "대표이사"} <= positions
+
+    body = client.get(_GLOSSARY, params={"category": "직책", "limit": 500}).json()
+    titles = {item["term"] for item in body["items"]}
+    assert {"지점장", "팀장", "센터장", "상담원", "준법감시인"} <= titles
+
+
+def test_seed_terms_are_unique(client: TestClient) -> None:
+    """같은 용어가 두 번 실리면 힌트에 중복으로 들어가고 등록도 조용히 건너뛴다."""
+    from app.glossary.seed import SEED_TERMS
+
+    terms = [term for term, _, _, _ in SEED_TERMS]
+    assert len(terms) == len(set(terms))
+
+
+def test_seed_priority_reflects_the_category(client: TestClient) -> None:
+    """힌트 길이 상한 때문에 전부 실을 수 없다. 오인식이 잦은 분류가 먼저 실려야 한다."""
+    csrf = _login(client)
+    client.post(f"{_GLOSSARY}/seed", headers={CSRF_HEADER_NAME: csrf})
+
+    hint = client.get(f"{_GLOSSARY}/hint").json()
+
+    # 1000개 중 일부만 실린다. 그 사실이 응답에 드러나야 한다.
+    assert hint["active_count"] >= 1000
+    assert hint["included_count"] < hint["active_count"]
+    # 여신 용어가 우선순위가 가장 높다.
+    assert "중도상환수수료" in hint["hint"]
 
 
 def test_seed_does_not_overwrite_edited_terms(client: TestClient) -> None:
@@ -225,7 +264,7 @@ def test_hint_reports_what_it_had_to_drop(client: TestClient) -> None:
 
     hint = client.get(f"{_GLOSSARY}/hint").json()
 
-    assert len(hint["hint"]) <= HINT_MAX_CHARS
+    assert len(hint["hint"].encode("utf-8")) <= HINT_MAX_BYTES
     assert hint["active_count"] == 60
     assert hint["included_count"] < hint["active_count"]
 
@@ -288,3 +327,33 @@ def test_prompt_appendix_carries_definitions_and_aliases(
 
     assert "중도상환수수료: 약정 기간 전에 갚을 때 내는 수수료." in appendix
     assert "중도 상환 수수료" in appendix
+
+
+def test_hint_is_capped_in_bytes_not_characters(client: TestClient) -> None:
+    """한글은 UTF-8 로 글자당 3바이트다.
+
+    글자 수로 재면 393자짜리 힌트가 935바이트가 되어 엔드포인트의 896바이트 상한을
+    넘고, **전사가 통째로 실패한다.** 실제로 그렇게 실패한 적이 있어 못박아 둔다.
+    """
+    csrf = _login(client)
+    for index in range(200):
+        _add(client, csrf, term=f"한글로만이루어진긴금융용어{index:03d}", priority=index)
+
+    hint = client.get(f"{_GLOSSARY}/hint").json()
+
+    assert hint["hint_bytes"] == len(hint["hint"].encode("utf-8"))
+    assert hint["hint_bytes"] <= hint["max_bytes"]
+    # 글자 수는 상한보다 훨씬 적다 — 바이트로 세고 있다는 증거다.
+    assert len(hint["hint"]) < hint["max_bytes"]
+
+
+def test_full_seed_hint_fits_the_endpoint_limit(client: TestClient) -> None:
+    """기본 사전 1000개를 전부 켠 상태에서도 힌트가 상한을 넘지 않아야 한다."""
+    csrf = _login(client)
+    client.post(f"{_GLOSSARY}/seed", headers={CSRF_HEADER_NAME: csrf})
+
+    hint = client.get(f"{_GLOSSARY}/hint").json()
+
+    # Groq 가 강제하는 값(896바이트)보다 여유가 있어야 한다.
+    assert hint["hint_bytes"] <= 896
+    assert hint["hint_bytes"] <= hint["max_bytes"]

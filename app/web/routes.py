@@ -180,6 +180,24 @@ def qa_compliance_page(
     )
 
 
+@router.get("/admin/integration", response_class=HTMLResponse, response_model=None)
+def integration_page(
+    request: Request, principal: Principal | None = Depends(optional_principal)
+) -> HTMLResponse | RedirectResponse:
+    """연동 설정 화면 (시스템 관리 하위).
+
+    값을 여기서 바꾸지는 않는다. 접속 주소·키는 환경변수로만 주입되며 (SEC-022),
+    이 화면은 "지금 어디에 어떻게 붙어 있는가"를 보여주고 수집을 실행한다.
+    """
+    if principal is None:
+        return _redirect_to_login(request)
+    if not principal.has(Permission.ADMIN_MANAGE):
+        return RedirectResponse(url="/", status_code=303)
+    return templates.TemplateResponse(
+        request, "integration.html", {"page": "integration", **_view_context(principal)}
+    )
+
+
 @router.get("/admin", response_class=HTMLResponse, response_model=None)
 def admin_page(
     request: Request, principal: Principal | None = Depends(optional_principal)

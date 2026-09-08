@@ -23,6 +23,7 @@ from app.auth.principal import Principal
 from app.auth.roles import Permission
 from app.core.config import Settings
 from app.core.exceptions import (
+    ApplicationError,
     AuthorizationError,
     ConflictError,
     NotFoundError,
@@ -502,6 +503,86 @@ class JobService:
                 metadata={"deleted_count": deleted},
             )
         return deleted
+
+    def delete_job(self, principal: Principal, job_id: str) -> None:
+        """Job 을 통째로 지운다 (FR-T-009).
+
+        음성 → Transcript → Job 행 순서로 지운다. 파생 결과(분석·QA)는 FK 의
+        `ON DELETE CASCADE` 가 함께 거둔다.
+
+        **행을 먼저 지우면 파일이 고아가 된다.** 참조 없는 Confidential 파일은 보관정책
+        삭제 대상에도 잡히지 않아 영원히 남는다 (Harness §21 / §22). 그래서 순서를 지킨다.
+
+        되돌릴 수 없다. 그래서 감사에 무엇을 지웠는지 남긴다 — 파일명과 시각은 남기되
+        Transcript 본문은 남기지 않는다 (§64).
+        """
+        job = self.get_job(principal, job_id)
+        if not self._can_delete(principal, job):
+            raise NotFoundError(internal_detail="delete not permitted")
+
+        # 처리 중인 Job 을 지우면 워커가 사라진 행을 붙들고 실패한다. 먼저 멈춘다.
+        if JobStatus(job.status) in (JobStatus.QUEUED, JobStatus.PROCESSING):
+            raise ConflictError(
+                "처리 중인 상담은 삭제할 수 없습니다. 먼저 취소해 주세요.",
+                internal_detail=f"job status is {job.status}",
+            )
+
+        actor = principal.to_audit_actor()
+        transcript_count = 0
+        now = datetime.now(UTC)
+        for transcript in self._transcript_repo.list_for_job(job.id):
+            self._transcripts.delete(transcript.storage_relpath)
+            transcript.deleted_at = now
+            transcript_count += 1
+
+        self._purge_audio(job, actor=actor, reason="job_deleted")
+
+        self._audit.record(
+            AuditEventType.JOB_DELETED,
+            actor=actor,
+            action="delete_job",
+            target_type="job",
+            target_id=job.id,
+            job_id=job.id,
+            audio_sha256=job.audio_sha256,
+            metadata={
+                "original_filename": job.original_filename,
+                "transcript_count": transcript_count,
+                "created_at": job.created_at.isoformat(),
+            },
+        )
+        self._session.delete(job)
+        self._session.flush()
+
+    def delete_jobs(self, principal: Principal, job_ids: list[str]) -> dict[str, object]:
+        """여러 상담을 지운다 (목록 화면의 일괄 삭제).
+
+        **하나가 실패해도 나머지는 진행한다.** 전부 되돌리면 "무엇이 왜 안 지워졌는지"를
+        사용자가 알 수 없고, 다시 눌러도 같은 결과가 나온다. 실패한 것만 이유와 함께
+        돌려주어 사용자가 다음 행동을 정할 수 있게 한다 (Harness §4.3).
+
+        건별로 커밋하지는 않는다. 트랜잭션 경계는 호출부(요청 단위)가 갖는다.
+        """
+        deleted: list[str] = []
+        failed: list[dict[str, str]] = []
+
+        for job_id in job_ids:
+            try:
+                self.delete_job(principal, job_id)
+                deleted.append(job_id)
+            except ApplicationError as exc:
+                failed.append({"job_id": job_id, "message": exc.message})
+
+        logger.info(
+            "bulk job delete finished",
+            extra={
+                "event": "JOB_BULK_DELETED",
+                "requested": len(job_ids),
+                "deleted": len(deleted),
+                "failed": len(failed),
+            },
+        )
+        return {"deleted": deleted, "failed": failed}
 
     def purge_expired_audio(self, *, limit: int = 100) -> int:
         """보관기간이 지난 음성을 삭제한다 (Harness §21).

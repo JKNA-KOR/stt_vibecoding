@@ -97,6 +97,11 @@ class TranscriptSegmentResponse(BaseModel):
     start: float
     end: float
     text: str
+    # 모델이 매긴 확신도(0~1). 값을 주지 않는 엔진에서는 null 이다.
+    confidence: float | None = None
+    # 발화자. **음향 기반 화자분리가 아니라 문맥 추정**이며, 후처리를 거치지 않은
+    # Transcript 에서는 null 이다 (Harness §4.3).
+    speaker: str | None = None
 
 
 class TranscriptDetailResponse(BaseModel):
@@ -115,3 +120,25 @@ class JobListQuery(BaseModel):
     status: JobStatus | None = None
     limit: int = Field(default=20, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
+
+
+class BulkDeleteRequest(BaseModel):
+    """일괄 삭제 요청.
+
+    한 번에 지울 수 있는 건수에 상한을 둔다. 목록 화면에서 실수로 전체 선택한 뒤
+    누르는 사고를 한 번에 크게 만들지 않기 위해서다 (Harness §24 / §48).
+    """
+
+    job_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class BulkDeleteFailure(BaseModel):
+    job_id: str
+    message: str
+
+
+class BulkDeleteResponse(BaseModel):
+    """부분 실패를 그대로 돌려준다. 성공한 척하지 않는다 (Harness §4.3)."""
+
+    deleted: list[str]
+    failed: list[BulkDeleteFailure]

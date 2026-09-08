@@ -42,6 +42,13 @@ class MockLLMProvider(LLMProvider):
     ) -> LLMResponse:
         digest = hashlib.sha256(user_content.encode("utf-8")).digest()
         properties = (json_schema or {}).get("properties") or {}
+        if "segments" in properties and "compliance_score" not in properties:
+            return LLMResponse(
+                content=_refine_content(user_content),
+                provider=self.provider_name,
+                model_name=self._model,
+                duration_seconds=0.0,
+            )
         if "compliance_score" in properties:
             content = _qa_content(digest)
             return LLMResponse(
@@ -130,3 +137,31 @@ def _qa_content(digest: bytes) -> dict[str, Any]:
         "improvements": ["확정되지 않은 조건은 심사 절차와 함께 안내한다."],
         "summary": "요청 사항을 확인하고 처리 결과를 안내했다. 일부 안내에 확인이 필요하다.",
     }
+
+
+def _refine_content(user_content: str) -> dict[str, Any]:
+    """후처리 스키마에 맞는 결정론적 응답.
+
+    입력의 `[index] 문장` 을 그대로 되짚어 **같은 개수, 같은 순서**로 돌려준다. 실제
+    모델이 문장을 빠뜨리는 실패 모드는 평가기 쪽 테스트가 따로 재현하므로, Mock 은
+    정상 경로를 대표한다.
+
+    화자는 번갈아 붙인다. 실제 상담이 대체로 그렇고, Mock 결과를 기대값으로 쓰는
+    테스트가 이 규칙에 의존한다.
+    """
+    import re
+
+    speakers = ("상담원", "고객")
+    segments = []
+    for order, match in enumerate(re.finditer(r"^\[(\d+)\]\s?(.*)$", user_content, re.M)):
+        index = int(match.group(1))
+        text = match.group(2).strip()
+        segments.append(
+            {
+                "index": index,
+                # 보정한 티가 나도록 공백만 정리한다. 내용을 바꾸지 않는다.
+                "text": " ".join(text.split()),
+                "speaker": speakers[order % 2],
+            }
+        )
+    return {"segments": segments}

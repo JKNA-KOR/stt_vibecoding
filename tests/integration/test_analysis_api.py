@@ -358,3 +358,88 @@ def test_role_change_takes_effect_immediately(client: TestClient) -> None:
     _login(client, "agent")
 
     assert client.get(f"{API_PREFIX}/admin/users").status_code == 200
+
+
+# --- Transcript 후처리 (문맥 보정 + 화자분리) -------------------------------------
+
+
+@pytest.fixture
+def refine_client(settings: Settings, accounts: None) -> Iterator[TestClient]:  # noqa: ARG001
+    """보정과 화자분리를 켠 클라이언트. Inline 큐라 업로드 응답 시점에 끝나 있다."""
+    configured = settings.model_copy(
+        update={"enable_llm_correction": True, "enable_diarization": True}
+    )
+    with TestClient(create_app(configured)) as client:
+        yield client
+
+
+def test_refined_transcript_is_added_without_touching_the_original(
+    refine_client: TestClient, wav: Path
+) -> None:
+    """보정은 원본을 대체하지 않는다. 세 벌이 함께 남는다 (Harness §50)."""
+    csrf = _login(refine_client)
+    job_id = _upload(refine_client, csrf, wav)
+
+    kinds = {
+        row["kind"] for row in refine_client.get(f"{API_PREFIX}/jobs/{job_id}/transcripts").json()
+    }
+
+    assert {"RAW", "NORMALIZED", "LLM_CORRECTED"} <= kinds
+
+
+def test_refined_transcript_carries_speaker_labels(
+    refine_client: TestClient, wav: Path
+) -> None:
+    csrf = _login(refine_client)
+    job_id = _upload(refine_client, csrf, wav)
+
+    body = refine_client.get(
+        f"{API_PREFIX}/jobs/{job_id}/transcript", params={"kind": "LLM_CORRECTED"}
+    ).json()
+
+    speakers = {segment["speaker"] for segment in body["segments"]}
+    assert speakers <= {"상담원", "고객", None}
+    assert speakers & {"상담원", "고객"}
+
+
+def test_original_transcript_has_no_speaker(
+    refine_client: TestClient, wav: Path
+) -> None:
+    """후처리를 거치지 않은 종류에는 화자가 붙지 않는다."""
+    csrf = _login(refine_client)
+    job_id = _upload(refine_client, csrf, wav)
+
+    body = refine_client.get(
+        f"{API_PREFIX}/jobs/{job_id}/transcript", params={"kind": "NORMALIZED"}
+    ).json()
+
+    assert all(segment["speaker"] is None for segment in body["segments"])
+
+
+def test_refinement_keeps_every_segment(refine_client: TestClient, wav: Path) -> None:
+    """문장이 사라지는 것이 이 계층의 가장 나쁜 실패다."""
+    csrf = _login(refine_client)
+    job_id = _upload(refine_client, csrf, wav)
+
+    original = refine_client.get(
+        f"{API_PREFIX}/jobs/{job_id}/transcript", params={"kind": "NORMALIZED"}
+    ).json()
+    refined = refine_client.get(
+        f"{API_PREFIX}/jobs/{job_id}/transcript", params={"kind": "LLM_CORRECTED"}
+    ).json()
+
+    assert len(refined["segments"]) == len(original["segments"])
+    # 시각은 절대 바뀌지 않는다 — 모델은 시각을 모른다.
+    assert [(s["start"], s["end"]) for s in refined["segments"]] == [
+        (s["start"], s["end"]) for s in original["segments"]
+    ]
+
+
+def test_refinement_is_off_by_default(client: TestClient, wav: Path) -> None:
+    """기본값은 꺼짐이다. 켜지 않았는데 보정본이 생기면 안 된다."""
+    csrf = _login(client)
+    job_id = _upload(client, csrf, wav)
+
+    kinds = {row["kind"] for row in client.get(f"{API_PREFIX}/jobs/{job_id}/transcripts").json()}
+
+    assert "LLM_CORRECTED" not in kinds

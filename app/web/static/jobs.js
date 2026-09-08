@@ -123,7 +123,23 @@ function renderJobs(payload) {
   updatePager();
 }
 
-/** 변환 정확도(추정). 모델 확신도이지 측정된 정확도가 아니므로 표기도 그렇게 한다. */
+/* 인식 신뢰도.
+ *
+ * **백분율 정답률이 아니다.** Whisper 의 평균 토큰 확률(exp(avg_logprob))이라, 완벽하게
+ * 전사된 문장도 0.82 안팎에서 천장을 친다 — 실측으로 확인했다. 그래서 0.76 을 "76점"
+ * 으로 읽으면 멀쩡한 결과를 불량으로 오해하게 된다.
+ *
+ * 구간은 관측된 분포에 맞춘다 (Harness §20 / §4.3).
+ *   0.75 이상  양호   — 정상 범위
+ *   0.65~0.75  보통   — 잡음이나 겹침이 있을 수 있음
+ *   0.65 미만  확인   — 무음 환각·저음질 의심 구간
+ */
+const CONFIDENCE_BANDS = [
+  { min: 0.75, label: "양호", css: "chip-good" },
+  { min: 0.65, label: "보통", css: "chip-fair" },
+  { min: 0, label: "확인", css: "chip-poor" },
+];
+
 function confidenceCell(value) {
   const cell = el("td", "numeric");
   if (value === null || value === undefined) {
@@ -132,15 +148,14 @@ function confidenceCell(value) {
     cell.appendChild(el("span", "hint-inline", "-"));
     return cell;
   }
-  const percent = Math.round(value * 100);
-  cell.appendChild(el("span", "score-chip " + confidenceClass(percent), `${percent}%`));
-  return cell;
-}
 
-function confidenceClass(percent) {
-  if (percent >= 85) return "chip-good";
-  if (percent >= 70) return "chip-fair";
-  return "chip-poor";
+  const band = CONFIDENCE_BANDS.find((entry) => value >= entry.min);
+  const chip = el("span", "score-chip " + band.css, band.label);
+  // 원값도 함께 보여준다. 구간만 보여주면 미세한 변화를 볼 수 없다.
+  chip.title = `모델 신뢰도 ${value.toFixed(2)} (정답률이 아님. 정상 범위 0.75~0.85)`;
+  cell.appendChild(chip);
+  cell.appendChild(el("span", "hint-inline", ` ${value.toFixed(2)}`));
+  return cell;
 }
 
 function qaScoreCell(job) {

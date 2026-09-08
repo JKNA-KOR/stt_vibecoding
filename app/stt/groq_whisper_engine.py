@@ -261,7 +261,13 @@ class GroqWhisperEngine(STTEngine):
         상태코드만 남긴다 — 응답 본문에는 API 키가 반사되거나 음성 메타데이터가 섞여
         나올 수 있다 (Harness §9 / §15). 재시도해도 같은 결과인 입력 문제와, 잠시 뒤
         달라질 수 있는 시스템 문제를 여기서 갈라 놓아야 재시도 정책이 성립한다.
+
+        400 을 무조건 "파일이 원인" 으로 보면 안 된다. **설정이 원인인 400 이 있다** —
+        용어사전 힌트가 길어 거절당하면 음성은 멀쩡한데 전사가 실패하고, 오류만 보고는
+        파일을 의심하게 되어 원인을 찾는 데 오래 걸린다 (실제로 그랬다). 본문 전체를
+        남기지는 않되, 알려진 표식만 확인해 우리 말로 바꿔 준다.
         """
+        detail = _error_marker(exc)
         logger.warning(
             "stt api call failed",
             extra={
@@ -269,14 +275,42 @@ class GroqWhisperEngine(STTEngine):
                 "engine": self.engine_name,
                 "status": exc.code,
                 "endpoint_host": self._endpoint_host,
+                "error_marker": detail,
             },
         )
         if exc.code in (401, 403):
             return STTModelError(internal_detail=f"stt api http {exc.code} 인증 실패")
+        if detail == _PROMPT_TOO_LONG:
+            # 파일 문제가 아니다. 사전을 줄이거나 우선순위를 조정해야 한다.
+            return STTModelError(
+                internal_detail=(
+                    "stt api rejected the vocabulary hint as too long; "
+                    "reduce the glossary hint (app/glossary/service.py HINT_MAX_BYTES)"
+                )
+            )
         if exc.code in _INPUT_ERROR_STATUSES:
             # 파일이 원인이다. 같은 파일로 다시 보내도 결과가 같다.
             return AudioDecodeError(internal_detail=f"stt api rejected the audio ({exc.code})")
         return STTModelError(internal_detail=f"stt api http error {exc.code}")
+
+
+# 엔드포인트가 돌려주는 오류 코드 중, 우리가 다르게 다뤄야 하는 것들.
+# 본문 전체를 읽어 남기지 않고 이 표식만 확인한다 (Harness §15).
+_PROMPT_TOO_LONG = "invalid_prompt"
+_KNOWN_MARKERS: tuple[str, ...] = (_PROMPT_TOO_LONG,)
+
+
+def _error_marker(exc: urllib.error.HTTPError) -> str:
+    """오류 본문에서 알려진 표식만 찾아낸다.
+
+    본문을 그대로 남기지 않는 이유는 API 키나 음성 메타데이터가 섞여 나올 수 있기
+    때문이다. 여기서는 **미리 정한 문자열이 있는지만** 보고 그 이름을 돌려준다.
+    """
+    try:
+        body = exc.read(4096).decode("utf-8", errors="replace")
+    except Exception:  # noqa: BLE001 - 본문을 못 읽어도 상태코드로 분류는 된다
+        return ""
+    return next((marker for marker in _KNOWN_MARKERS if marker in body), "")
 
 
 def _encode_multipart(fields: dict[str, str], file_path: Path) -> tuple[bytes, str]:

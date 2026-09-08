@@ -153,6 +153,13 @@ function setProgress(bar, ratio) {
   bar.className = "progress-bar p" + step;
 }
 
+/** 화자 라벨의 표시 색. 서버가 주는 값은 "상담원" / "고객" 둘뿐이다. */
+function speakerClass(label) {
+  if (label === "상담원") return "agent";
+  if (label === "고객") return "customer";
+  return "unknown";
+}
+
 /* --- 라이브 캡션 재생 -------------------------------------------------------
  *
  * 전사 결과를 한 줄씩 드러낸다. **이것은 표시 효과이지 스트리밍이 아니다.** 업로드

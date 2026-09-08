@@ -13,6 +13,7 @@ from collections.abc import Callable
 from app.core.config import ConfigurationError, Settings
 from app.core.logging import get_logger
 from app.stt.base import STTEngine
+from app.stt.external_engine import ExternalSTTEngine
 from app.stt.faster_whisper_engine import FasterWhisperEngine
 from app.stt.groq_whisper_engine import GroqWhisperEngine
 from app.stt.mock_engine import MockSTTEngine
@@ -23,6 +24,7 @@ logger = get_logger(__name__)
 _REGISTRY: dict[str, Callable[[Settings], STTEngine]] = {
     FasterWhisperEngine.engine_name: FasterWhisperEngine,
     GroqWhisperEngine.engine_name: GroqWhisperEngine,
+    ExternalSTTEngine.engine_name: ExternalSTTEngine,
     MockSTTEngine.engine_name: MockSTTEngine,
 }
 

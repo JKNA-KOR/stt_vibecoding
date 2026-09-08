@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ui %}
+{% set page_icon = "plug" %}
+{% block title %}연동 인터페이스 · STT 서비스{% endblock %}
+{% block page_title %}연동 인터페이스{% endblock %}
+{% block page_subtitle %}녹취서버 수집, 결과 송신, 타사 STT 엔진 연결 상태{% endblock %}
+
+{% block topbar_tools %}
+<button type="button" id="integration-refresh">{{ ui.icon("refresh") }} 상태 확인</button>
+{% endblock %}
+
+{% block content %}
+
+{# 접속 주소는 보여주고 키는 보여주지 않는다. 값은 환경변수로만 주입된다 (SEC-022). #}
+<section class="panel">
+  <div class="panel-head">
+    <h2 class="panel-title">{{ ui.icon("inbox") }} 수신 — 녹취서버 수집</h2>
+    <div class="controls">
+      <span class="conn conn-off" id="inbound-state">확인 중</span>
+      <button type="button" id="ingest-run">{{ ui.icon("refresh") }} 지금 수집</button>
+    </div>
+  </div>
+  <div class="panel-body">
+    <dl class="facts" id="inbound-facts"></dl>
+    <p class="hint" id="inbound-detail"></p>
+    <div id="ingest-result"></div>
+    <p class="hint">
+      수집된 녹취는 업로드와 <strong>같은 검증</strong>을 지납니다 — 확장자·시그니처·크기·재생시간.
+      같은 건을 두 번 가져와도 새 작업이 만들어지지 않습니다.
+    </p>
+  </div>
+</section>
+
+<div class="split">
+  <section class="panel">
+    <div class="panel-head">
+      <h2 class="panel-title">{{ ui.icon("upload") }} 송신 — 결과 전달</h2>
+      <span class="conn conn-off" id="outbound-state">확인 중</span>
+    </div>
+    <div class="panel-body">
+      <dl class="facts" id="outbound-facts"></dl>
+      <p class="hint">
+        전사가 끝나면 전문을 보냅니다. 송신 실패는 전사 결과를 무효로 만들지 않으며,
+        성공·실패 모두 감사 로그에 남습니다.
+      </p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2 class="panel-title">{{ ui.icon("audio") }} 전사 엔진</h2>
+      <span class="conn conn-off" id="engine-state">확인 중</span>
+    </div>
+    <div class="panel-body">
+      <dl class="facts" id="engine-facts"></dl>
+      <p class="hint">
+        <code>external</code> 로 바꾸면 타사 STT 솔루션을 씁니다. 상대는 전문 규격의
+        <code>POST /transcribe</code> 만 구현하면 됩니다.
+      </p>
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2 class="panel-title">{{ ui.icon("book") }} 전문 규격</h2>
+  </div>
+  <div class="panel-body">
+    <p class="hint">
+      세 방향의 전문 형식·인증·오류 코드·재시도 규칙은 저장소의
+      <code>docs/INTERFACE.md</code> 에 있습니다. 연동처에 전달할 규격서입니다.
+    </p>
+    <dl class="facts">
+      <dt>수신 (녹취서버 → STT)</dt>
+      <dd>공유 폴더에 파일 + 선택적 <code>.json</code> 사이드카, 또는 REST 목록·다운로드</dd>
+      <dt>송신 (STT → 타 솔루션)</dt>
+      <dd><code>POST</code> 로 <code>STT_RESULT</code> 전문. <code>X-Message-Id</code> 로 중복 제거</dd>
+      <dt>엔진 (STT → 타사 엔진)</dt>
+      <dd><code>POST /transcribe</code> multipart, 응답은 segments 배열</dd>
+      <dt>설정 변경</dt>
+      <dd>접속 정보는 환경변수로만 주입됩니다. 이 화면에서는 바꿀 수 없습니다 (SEC-022)</dd>
+    </dl>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/integration.js"></script>
+{% endblock %}

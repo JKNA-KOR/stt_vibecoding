@@ -88,6 +88,7 @@ def _login(client: TestClient, username: str = "agent") -> None:
         "/qa/scores",
         "/qa/compliance",
         "/admin",
+        "/admin/integration",
     ],
 )
 def test_unauthenticated_pages_redirect_to_login(client: TestClient, path: str) -> None:
@@ -159,6 +160,7 @@ def _rendered_pages(client: TestClient) -> dict[str, str]:
         "/consultations": client.get("/consultations").text,
         "/realtime": client.get("/realtime").text,
         "/glossary": client.get("/glossary").text,
+        "/admin/integration": client.get("/admin/integration").text,
         "/qa": client.get("/qa").text,
         "/qa/scores": client.get("/qa/scores").text,
         "/qa/compliance": client.get("/qa/compliance").text,
@@ -203,6 +205,7 @@ def test_static_assets_are_served(client: TestClient) -> None:
         "/static/realtime.js",
         "/static/pcm-worklet.js",
         "/static/glossary.js",
+        "/static/integration.js",
     ):
         response = client.get(asset)
         assert response.status_code == 200, asset
@@ -285,6 +288,55 @@ def test_consultation_page_leaves_the_script_for_javascript(client: TestClient) 
 
     assert '<ol class="segments" id="script-segments"></ol>' in body
     assert "{{" not in body
+
+
+def test_consultation_shows_details_first(client: TestClient) -> None:
+    """상세정보가 기본이다. 캡션은 눌러야 돈다 — 자동 재생은 확인을 방해한다."""
+    _login(client)
+    body = client.get("/consultations").text
+
+    assert 'id="consult-facts"' in body
+    assert 'id="detail-panel"' in body
+    # 재생 버튼은 있되, 자동으로 돌지 않는다 (스크립트 쪽에서 검증한다).
+    assert 'id="script-caption"' in body
+
+
+def test_recording_delete_is_admin_only_in_the_ui(client: TestClient) -> None:
+    """버튼을 숨기는 것은 권한 제어가 아니지만(Harness §10), 쓸 수 없는 UI 를 보일
+    이유도 없다. 실제 차단은 API 가 한다."""
+    _login(client, "agent")
+    body = client.get("/consultations").text
+
+    assert 'id="consult-delete-mode"' not in body
+    assert 'id="delete-modal"' not in body
+
+    _login(client, "root")
+    body = client.get("/consultations").text
+
+    assert 'id="consult-delete-mode"' in body
+    assert 'id="consult-delete"' in body
+    assert 'id="delete-modal"' in body
+
+
+def test_delete_modal_warns_before_confirming(client: TestClient) -> None:
+    """무엇이 사라지는지 밝히지 않고 확인을 받으면 안 된다 (Harness §48)."""
+    _login(client, "root")
+    body = client.get("/consultations").text
+
+    assert "되돌릴 수 없습니다" in body
+    assert "감사 로그에 기록됩니다" in body
+    assert 'id="delete-modal-confirm"' in body
+    assert 'id="delete-modal-cancel"' in body
+
+
+def test_consultation_script_does_not_autoplay_captions() -> None:
+    """목록 화면에서 캡션이 저절로 돌면 내용을 확인하려는 사람에게 방해가 된다."""
+    source = (STATIC_DIR / "consultations.js").read_text(encoding="utf-8")
+    code = _strip_js_comments(source)
+
+    # 재생 함수는 '캡션 재생' 핸들러 안에서만 불린다.
+    assert code.count("playCaptions(") == 1
+    assert "script-caption" in code
 
 
 def test_qa_menus_are_present_for_signed_in_users(client: TestClient) -> None:

@@ -18,6 +18,8 @@ from app.api.dependencies.common import (
 )
 from app.api.schemas.common import PageMeta
 from app.api.schemas.jobs import (
+    BulkDeleteRequest,
+    BulkDeleteResponse,
     JobCreatedResponse,
     JobListResponse,
     JobResponse,
@@ -119,6 +121,34 @@ def retry_job(
 ) -> JobResponse:
     """실패한 Job 을 다시 큐에 넣는다. 재시도 횟수는 설정 상한을 넘지 못한다 (Harness §24)."""
     return JobResponse.model_validate(jobs.retry_job(principal, job_id))
+
+
+@router.post("/bulk-delete", response_model=BulkDeleteResponse)
+def bulk_delete_jobs(
+    payload: BulkDeleteRequest,
+    principal: Principal = Depends(csrf_protected),
+    jobs: JobService = Depends(job_service),
+) -> BulkDeleteResponse:
+    """여러 상담을 한 번에 지운다 (목록 화면의 일괄 삭제).
+
+    DELETE 대신 POST 를 쓴다. 삭제 대상 목록을 본문으로 보내야 하는데, DELETE 요청의
+    본문은 프록시·게이트웨이가 버리는 경우가 있어 조용히 아무것도 지워지지 않는다.
+
+    부분 실패를 허용한다 — 무엇이 왜 안 지워졌는지 돌려주어야 사용자가 다음 행동을
+    정할 수 있다 (Harness §4.3).
+    """
+    result = jobs.delete_jobs(principal, payload.job_ids)
+    return BulkDeleteResponse(**result)
+
+
+@router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_job(
+    job_id: str,
+    principal: Principal = Depends(csrf_protected),
+    jobs: JobService = Depends(job_service),
+) -> None:
+    """상담을 통째로 지운다. 음성·전사·분석·QA 가 함께 사라지며 되돌릴 수 없다."""
+    jobs.delete_job(principal, job_id)
 
 
 @router.delete("/{job_id}/audio", status_code=status.HTTP_204_NO_CONTENT)

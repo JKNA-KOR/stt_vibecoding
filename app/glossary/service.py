@@ -32,12 +32,15 @@ _MAX_DEFINITION_CHARS = 500
 _MAX_ALIASES = 10
 _MAX_CATEGORY_CHARS = 40
 
-# 전사 힌트에 실을 최대 글자 수.
+# 전사 힌트에 실을 최대 크기. **글자 수가 아니라 UTF-8 바이트다.**
 #
-# Whisper 의 `initial_prompt` 는 약 224 토큰까지만 반영된다. 넘겨도 오류가 나지는 않지만
-# 앞쪽만 쓰이고 나머지는 조용히 버려진다 — 그러면 "등록했는데 왜 안 되지"가 된다.
-# 한국어는 토큰당 글자 수가 적어 보수적으로 잡는다.
-HINT_MAX_CHARS = 400
+# Whisper 의 `initial_prompt` 는 약 224 토큰까지만 반영되고, 엔드포인트는 그 한도를
+# 바이트로 강제한다 — Groq 는 896바이트를 넘으면 `invalid_prompt` 로 400 을 돌려준다.
+#
+# **한글은 UTF-8 로 한 글자가 3바이트다.** 글자 수로 세면 393자짜리 힌트가 935바이트가
+# 되어 상한을 넘는다. 실제로 그렇게 전사가 통째로 실패한 적이 있어 바이트로 바꿨다.
+# 상한 아래로 여유를 두는 것은 엔드포인트마다 계산이 조금씩 다르기 때문이다.
+HINT_MAX_BYTES = 800
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,9 +111,9 @@ class GlossaryService:
     def transcription_hint(self) -> str:
         """전사 엔진에 넘길 어휘 힌트.
 
-        용어를 쉼표로 이어 붙인 한 줄이다. 길이 상한을 넘으면 `priority` 가 높은 것부터
-        채우고 나머지는 버린다 — 앞쪽만 반영되는 특성을 알고 자르는 편이, 모르고 잘리는
-        것보다 낫다 (Harness §4.3).
+        용어를 쉼표로 이어 붙인 한 줄이다. 상한(UTF-8 바이트)을 넘으면 `priority` 가
+        높은 것부터 채우고 나머지는 버린다. 넘겨서 엔드포인트가 거절하면 **전사 자체가
+        실패한다** — 잘라서 보내는 편이 낫다 (Harness §4.3).
 
         별칭은 넣지 않는다. 힌트는 "이런 말이 나올 것"을 알리는 자리이지 오인식 표기를
         학습시키는 자리가 아니며, 잘못된 표기를 넣으면 그쪽으로 끌려간다.
@@ -126,13 +129,15 @@ class GlossaryService:
         )
 
         parts: list[str] = []
-        length = 0
+        size = 0
         for term in rows:
-            addition = len(term) + 2
-            if length + addition > HINT_MAX_CHARS:
+            # 구분자 ", " 2바이트를 함께 센다. 한글은 글자당 3바이트라 글자 수로 재면
+            # 실제 크기의 3분의 1로 착각하게 된다.
+            addition = len(term.encode("utf-8")) + 2
+            if size + addition > HINT_MAX_BYTES:
                 break
             parts.append(term)
-            length += addition
+            size += addition
 
         if len(parts) < len(rows):
             logger.info(

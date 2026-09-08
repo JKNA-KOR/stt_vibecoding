@@ -58,4 +58,6 @@ class HintResponse(BaseModel):
     hint: str
     included_count: int
     active_count: int
-    max_chars: int
+    # 상한은 **UTF-8 바이트**다. 한글은 글자당 3바이트라 글자 수와 크게 다르다.
+    max_bytes: int
+    hint_bytes: int

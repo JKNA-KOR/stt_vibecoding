@@ -30,8 +30,9 @@ def get_transcript(
 ) -> TranscriptDetailResponse:
     """Transcript 본문을 세그먼트 단위로 돌려준다.
 
-    기본값이 NORMALIZED 인 것은 화면 표시용이기 때문이다. 원본이 필요하면 `kind=RAW`
-    를 명시한다 — 두 산출물은 별도로 보관된다 (Harness §50).
+    기본값이 NORMALIZED 인 것은 화면 표시용이기 때문이다. 원본이 필요하면 `kind=RAW`,
+    후처리(문맥 보정 + 화자 추정)를 거친 사본이 필요하면 `kind=LLM_CORRECTED` 를
+    명시한다 — 세 산출물은 각각 별도로 보관된다 (Harness §50).
     """
     segments = jobs.read_transcript(principal, job_id, kind)
     return TranscriptDetailResponse(
@@ -39,7 +40,12 @@ def get_transcript(
         kind=kind,
         segments=[
             TranscriptSegmentResponse(
-                index=segment.index, start=segment.start, end=segment.end, text=segment.text
+                index=segment.index,
+                start=segment.start,
+                end=segment.end,
+                text=segment.text,
+                confidence=segment.confidence,
+                speaker=segment.speaker,
             )
             for segment in segments
         ],

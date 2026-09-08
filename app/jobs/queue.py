@@ -24,6 +24,8 @@ logger = get_logger(__name__)
 STT_TASK_NAME = "app.jobs.worker.run_stt_job"
 ANALYSIS_TASK_NAME = "app.jobs.worker.run_analysis_job"
 QA_TASK_NAME = "app.jobs.worker.run_qa_job"
+OUTBOUND_TASK_NAME = "app.jobs.worker.run_outbound_job"
+REFINE_TASK_NAME = "app.jobs.worker.run_refine_job"
 
 # 전용 큐를 쓴다. 다른 종류의 작업과 섞이면 STT 동시 실행 수 제한이 무의미해진다.
 STT_QUEUE_NAME = "stt"
@@ -62,6 +64,25 @@ class JobQueue(ABC):
         """
 
     @abstractmethod
+    def enqueue_outbound(self, job_id: str) -> None:
+        """결과 송신을 큐에 넣는다.
+
+        송신은 상대 시스템의 응답을 기다리므로 느릴 수 있다. 요청 스레드에서 부르면
+        전사 완료 처리가 상대 서버 사정에 묶인다 (Harness §24).
+
+        Raises:
+            QueueError: 큐에 접수하지 못한 경우.
+        """
+
+    @abstractmethod
+    def enqueue_refine(self, job_id: str) -> None:
+        """Transcript 후처리를 큐에 넣는다.
+
+        Raises:
+            QueueError: 큐에 접수하지 못한 경우.
+        """
+
+    @abstractmethod
     def depth(self) -> int:
         """현재 대기 중인 메시지 수. 알 수 없으면 -1 을 반환한다 (FR-M-002)."""
 
@@ -90,13 +111,19 @@ class InlineJobQueue(JobQueue):
         runner: Callable[[str], None],
         analysis_runner: Callable[[str], None] | None = None,
         qa_runner: Callable[[str], None] | None = None,
+        outbound_runner: Callable[[str], None] | None = None,
+        refine_runner: Callable[[str], None] | None = None,
     ) -> None:
         self._runner = runner
         self._analysis_runner = analysis_runner
         self._qa_runner = qa_runner
+        self._outbound_runner = outbound_runner
+        self._refine_runner = refine_runner
         self.enqueued: list[str] = []
         self.analysis_enqueued: list[str] = []
         self.qa_enqueued: list[str] = []
+        self.outbound_enqueued: list[str] = []
+        self.refine_enqueued: list[str] = []
 
     def enqueue(self, job_id: str) -> None:
         self.enqueued.append(job_id)
@@ -113,6 +140,18 @@ class InlineJobQueue(JobQueue):
             raise QueueError(internal_detail="inline queue has no qa runner")
         self.qa_enqueued.append(job_id)
         self._qa_runner(job_id)
+
+    def enqueue_outbound(self, job_id: str) -> None:
+        if self._outbound_runner is None:
+            raise QueueError(internal_detail="inline queue has no outbound runner")
+        self.outbound_enqueued.append(job_id)
+        self._outbound_runner(job_id)
+
+    def enqueue_refine(self, job_id: str) -> None:
+        if self._refine_runner is None:
+            raise QueueError(internal_detail="inline queue has no refine runner")
+        self.refine_enqueued.append(job_id)
+        self._refine_runner(job_id)
 
     def depth(self) -> int:
         # 즉시 실행하므로 대기 중인 메시지가 존재하지 않는다.
@@ -163,6 +202,12 @@ class CeleryJobQueue(JobQueue):
 
     def enqueue_qa(self, job_id: str) -> None:
         self._send(QA_TASK_NAME, job_id)
+
+    def enqueue_outbound(self, job_id: str) -> None:
+        self._send(OUTBOUND_TASK_NAME, job_id)
+
+    def enqueue_refine(self, job_id: str) -> None:
+        self._send(REFINE_TASK_NAME, job_id)
 
     def depth(self) -> int:
         """브로커 큐 길이. Redis 리스트 길이로 읽는다.
@@ -251,6 +296,8 @@ def create_queue(
     runner: Callable[[str], None] | None = None,
     analysis_runner: Callable[[str], None] | None = None,
     qa_runner: Callable[[str], None] | None = None,
+    outbound_runner: Callable[[str], None] | None = None,
+    refine_runner: Callable[[str], None] | None = None,
 ) -> JobQueue:
     """설정(`QUEUE_BACKEND`)에 맞는 큐 구현을 만든다.
 
@@ -268,6 +315,8 @@ def create_queue(
             runner or _default_runner(settings),
             analysis_runner or _default_analysis_runner(settings),
             qa_runner or _default_qa_runner(settings),
+            outbound_runner or _default_outbound_runner(settings),
+            refine_runner or _default_refine_runner(settings),
         )
     return CeleryJobQueue(settings)
 
@@ -306,5 +355,27 @@ def _default_qa_runner(settings: Settings) -> Callable[[str], None]:
         from app.jobs.worker import execute_qa
 
         execute_qa(job_id, settings=settings)
+
+    return run
+
+
+def _default_outbound_runner(settings: Settings) -> Callable[[str], None]:
+    """Inline 큐의 기본 송신 실행자."""
+
+    def run(job_id: str) -> None:
+        from app.jobs.worker import execute_outbound
+
+        execute_outbound(job_id, settings=settings)
+
+    return run
+
+
+def _default_refine_runner(settings: Settings) -> Callable[[str], None]:
+    """Inline 큐의 기본 후처리 실행자."""
+
+    def run(job_id: str) -> None:
+        from app.jobs.worker import execute_refine
+
+        execute_refine(job_id, settings=settings)
 
     return run

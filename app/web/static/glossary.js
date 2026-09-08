@@ -95,9 +95,12 @@ async function loadHint() {
     const warning = document.getElementById("hint-warning");
     const dropped = hint.active_count - hint.included_count;
     if (dropped > 0) {
+      // 상한은 글자 수가 아니라 UTF-8 바이트다. 한글은 글자당 3바이트라 둘이 크게 다르고,
+      // 글자 수로 안내하면 "왜 400자도 안 되는데 잘리지" 가 된다.
       warning.textContent =
-        `길이 상한(${hint.max_chars}자) 때문에 ${dropped}개 용어가 힌트에서 빠졌습니다. ` +
-        `중요한 용어의 우선순위를 올리세요. 뜻은 분석·QA 에는 그대로 쓰입니다.`;
+        `크기 상한(${hint.hint_bytes} / ${hint.max_bytes}바이트) 때문에 ${dropped}개 용어가 ` +
+        `힌트에서 빠졌습니다. 한글은 글자당 3바이트입니다. 중요한 용어의 우선순위를 올리세요 — ` +
+        `뜻은 분석·QA·보정에는 그대로 쓰입니다.`;
       warning.hidden = false;
     } else {
       warning.hidden = true;

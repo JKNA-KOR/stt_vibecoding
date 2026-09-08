@@ -22,7 +22,9 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import ApplicationError, ErrorCode, NotFoundError
 from app.core.logging import get_logger
 from app.glossary.service import GlossaryService
+from app.integration.outbound import OutboundSender
 from app.jobs.state import JobStatus, assert_transition
+from app.llm.refine_service import RefineService
 from app.llm.service import AnalysisService
 from app.llm.state import AnalysisStatus
 from app.qa.service import QAService
@@ -37,6 +39,7 @@ from app.stt.factory import get_engine
 from app.stt.normalization import (
     NORMALIZER_NAME,
     NORMALIZER_VERSION,
+    drop_low_confidence,
     lineage_metadata,
     normalize_segments,
 )
@@ -199,10 +202,20 @@ def _run_pipeline(job_id: str, *, settings: Settings) -> None:
         _discard_transcript_files(transcript_store, written)
         raise
 
+    if settings.enable_llm_correction or settings.enable_diarization:
+        # 후처리는 LLM 호출이라 느리다. 전사 트랜잭션 안에서 돌리면 커넥션과 행 잠금을
+        # 그동안 붙들고 있게 된다. 분석·QA 와 같은 이유로 별도 태스크로 넘긴다.
+        _enqueue_refine(job_id, settings=settings)
+
     if settings.enable_llm_analysis:
         # 커밋이 끝난 뒤에 발행한다. 트랜잭션 안에서 보내면 롤백된 Job 에 대해
         # 분석 메시지만 남아 워커가 없는 결과를 찾게 된다.
         _enqueue_analysis(job_id, settings=settings)
+
+    if settings.outbound_enabled:
+        # 분석·QA 를 기다리지 않는다. 전사만으로도 보낼 값이 있고, 순서를 걸면 분석
+        # 실패가 송신까지 막는다. 분석·QA 가 끝난 뒤의 재송신은 운영 판단으로 남긴다.
+        _enqueue_outbound(job_id, settings=settings)
 
     if settings.enable_qa and settings.qa_auto_run:
         # 분석과 나란히 발행한다. 분석 결과를 기다리지 않는 이유는, QA 는 녹취만 보고
@@ -296,13 +309,22 @@ def _store_results(
     )
 
     # 정규화는 원본을 덮어쓰지 않고 새 산출물을 만든다 (Harness §50, FR-T-002).
-    normalized_segments = normalize_segments(result.segments)
+    # 신뢰도 필터를 먼저 따로 적용한다. 정규화는 빈 세그먼트 제거와 반복 병합도 하므로
+    # 한 번에 돌리면 "몇 개가 환각으로 걸러졌는지" 를 셀 수 없다.
+    confident_segments = drop_low_confidence(
+        result.segments, settings.stt_min_segment_confidence
+    )
+    dropped_low_confidence = len(result.segments) - len(confident_segments)
+    normalized_segments = normalize_segments(confident_segments)
     normalized_relpath = transcript_store.write(
         job_id=job.id,
         kind=TranscriptKind.NORMALIZED,
         segments=normalized_segments,
         metadata={
             "provenance": provenance,
+            # 몇 개가 왜 빠졌는지 남긴다. 화면의 계보 안내가 이 값을 보여준다.
+            "min_segment_confidence": settings.stt_min_segment_confidence,
+            "dropped_low_confidence": dropped_low_confidence,
             **lineage_metadata(input_version=job.stt_config_version),
         },
     )
@@ -511,6 +533,32 @@ def _enqueue_qa(job_id: str, *, settings: Settings) -> None:
         )
 
 
+def _enqueue_refine(job_id: str, *, settings: Settings) -> None:
+    from app.jobs.queue import create_queue
+
+    try:
+        create_queue(settings).enqueue_refine(job_id)
+    except Exception as exc:  # noqa: BLE001 - 후처리 접수 실패가 전사 성공을 무효로 만들지 않는다
+        logger.exception(
+            "failed to enqueue transcript refine; transcript is still available",
+            extra={"event": "REFINE_ENQUEUE_FAILED", "job_id": job_id,
+                   "reason": type(exc).__name__},
+        )
+
+
+def _enqueue_outbound(job_id: str, *, settings: Settings) -> None:
+    from app.jobs.queue import create_queue
+
+    try:
+        create_queue(settings).enqueue_outbound(job_id)
+    except Exception as exc:  # noqa: BLE001 - 송신 접수 실패가 전사 성공을 무효로 만들지 않는다
+        logger.exception(
+            "failed to enqueue outbound delivery; transcript is still available",
+            extra={"event": "OUTBOUND_ENQUEUE_FAILED", "job_id": job_id,
+                   "reason": type(exc).__name__},
+        )
+
+
 def execute_analysis(job_id: str, *, settings: Settings | None = None) -> None:
     """LLM 분석 하나를 끝까지 처리한다 (FR-T-010).
 
@@ -649,3 +697,69 @@ def _mark_qa_skipped(job_id: str, *, settings: Settings) -> None:
         "qa skipped because the feature is disabled",
         extra={"event": "QA_SKIPPED", "job_id": job_id},
     )
+
+
+def execute_outbound(job_id: str, *, settings: Settings | None = None) -> None:
+    """결과를 외부 솔루션으로 보낸다 (송신 전문).
+
+    예외를 밖으로 던지지 않는다. **송신 실패는 전사 실패가 아니다** — 상대 시스템이
+    멈췄다고 우리 Job 을 실패로 만들면 원인이 뒤엉킨다 (Harness §4.3). 성공·실패는
+    감사에 남으므로 나중에 무엇이 안 갔는지 확인할 수 있다.
+    """
+    settings = settings or get_settings()
+
+    if not settings.outbound_enabled:
+        return
+
+    try:
+        with session_scope() as session:
+            OutboundSender(
+                session, settings=settings, transcript_store=TranscriptStore(settings)
+            ).send_job(job_id)
+    except Exception as exc:  # noqa: BLE001 - 송신 실패가 파이프라인을 멈추지 않는다
+        logger.exception(
+            "outbound delivery crashed",
+            extra={
+                "event": "OUTBOUND_CRASHED",
+                "job_id": job_id,
+                "reason": type(exc).__name__,
+            },
+        )
+
+
+def execute_refine(job_id: str, *, settings: Settings | None = None) -> None:
+    """전사 결과를 다듬고 화자를 붙인다 (LLM_CORRECTED Transcript 생성).
+
+    **원본을 덮어쓰지 않는다.** RAW 와 NORMALIZED 는 그대로 두고 한 벌을 더 만든다
+    (Harness §50). 후처리가 실패해도 기존 전사 결과는 온전하므로, 예외를 밖으로 던지지
+    않고 기록만 남긴다 (§4.3).
+    """
+    settings = settings or get_settings()
+
+    if not (settings.enable_llm_correction or settings.enable_diarization):
+        return
+
+    try:
+        with session_scope() as session:
+            RefineService(
+                session, settings=settings, transcript_store=TranscriptStore(settings)
+            ).run_refine(job_id)
+    except ApplicationError as exc:
+        logger.warning(
+            "transcript refine failed",
+            extra={
+                "event": "REFINE_FAILED",
+                "job_id": job_id,
+                "error_code": exc.code.value,
+                "failure_detail": exc.internal_detail,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - 후처리 실패가 파이프라인을 멈추지 않는다
+        logger.exception(
+            "transcript refine crashed",
+            extra={
+                "event": "REFINE_CRASHED",
+                "job_id": job_id,
+                "reason": type(exc).__name__,
+            },
+        )

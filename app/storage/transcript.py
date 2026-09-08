@@ -67,6 +67,8 @@ class TranscriptStore:
                     "text": segment.text,
                     # 모델 확신도. 값을 주지 않는 엔진에서는 null 이다.
                     "confidence": segment.confidence,
+                    # 발화자. 후처리를 거친 Transcript 에만 값이 있다.
+                    "speaker": segment.speaker,
                 }
                 for segment in segments
             ],
@@ -118,6 +120,7 @@ class TranscriptStore:
                 text=str(item["text"]),
                 # 이 필드 이전에 쓰인 파일에는 값이 없다. 없으면 없는 대로 읽는다.
                 confidence=_optional_float(item.get("confidence")),
+                speaker=_optional_text(item.get("speaker")),
             )
             for item in payload.get("segments", [])
         ]
@@ -160,3 +163,8 @@ def _optional_float(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
+
+
+def _optional_text(value: object) -> str | None:
+    """문자열이면 그대로, 아니면 None. 구버전 파일에는 이 키가 없다."""
+    return value if isinstance(value, str) and value else None

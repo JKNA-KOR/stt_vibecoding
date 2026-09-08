@@ -28,6 +28,9 @@ class AuditEventType(StrEnum):
     AUDIO_DOWNLOADED = "AUDIO_DOWNLOADED"
     AUDIO_DELETED = "AUDIO_DELETED"
     TRANSCRIPT_DELETED = "TRANSCRIPT_DELETED"
+    # 상담 통째 삭제. 취소(STT_JOB_CANCELLED)와 구분한다 — 감사자가 로그만 보고
+    # "멈춘 것"과 "지운 것"을 혼동하면 안 된다 (Harness §17).
+    JOB_DELETED = "JOB_DELETED"
 
     # --- 상담 품질 평가 (QA) ---
     # 평가 결과가 상담원 인사 자료로 쓰일 수 있다. 누가 언제 무엇을 평가했고 누가

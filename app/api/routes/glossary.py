@@ -23,7 +23,7 @@ from app.api.schemas.glossary import (
 )
 from app.auth.principal import Principal
 from app.core.config import Settings
-from app.glossary.service import HINT_MAX_CHARS, GlossaryService
+from app.glossary.service import HINT_MAX_BYTES, GlossaryService
 
 router = APIRouter(prefix="/glossary", tags=["glossary"])
 
@@ -71,7 +71,8 @@ def transcription_hint(
         hint=hint,
         included_count=len([part for part in hint.split(", ") if part]),
         active_count=active_count,
-        max_chars=HINT_MAX_CHARS,
+        max_bytes=HINT_MAX_BYTES,
+        hint_bytes=len(hint.encode("utf-8")),
     )
 
 

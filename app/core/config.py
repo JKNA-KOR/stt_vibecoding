@@ -37,6 +37,9 @@ AUDITED_CONFIG_KEYS: frozenset[str] = frozenset(
         "qa_auto_run",
         # 마이크 접근을 여는 결정이다. 언제 켜고 껐는지가 남아야 한다 (Harness §37).
         "enable_realtime_stt",
+        # 후처리는 화면에 보이는 문장을 바꾼다. 언제부터 적용되었는지가 남아야 한다.
+        "enable_llm_correction",
+        "enable_diarization",
         "llm_model_name",
     }
 )
@@ -51,6 +54,8 @@ _STT_CONFIG_VERSION_KEYS: tuple[str, ...] = (
     "stt_language",
     "stt_beam_size",
     "stt_vad_enabled",
+    # 이 값이 바뀌면 같은 음성에서 다른 세그먼트 수가 나온다 (Harness §20).
+    "stt_min_segment_confidence",
 )
 
 
@@ -122,8 +127,12 @@ class Settings(BaseSettings):
     #   faster-whisper : 로컬 모델로 전사한다. 음성이 사내를 벗어나지 않는다
     #   groq-whisper   : Groq 등 OpenAI 호환 전사 API 를 호출한다.
     #                    **음성 원본이 외부로 나간다** — ALLOW_EXTERNAL_STT 승인 필요
+    #   external       : 타사 STT 솔루션. 우리 전문 규격(docs/INTERFACE.md)을 따르는
+    #                    엔드포인트를 호출한다. 역시 음성이 밖으로 나간다
     #   mock           : 테스트용. prod 선택 시 기동 거부
-    stt_engine: Literal["faster-whisper", "groq-whisper", "mock"] = "faster-whisper"
+    stt_engine: Literal["faster-whisper", "groq-whisper", "external", "mock"] = (
+        "faster-whisper"
+    )
     stt_model_name: str = "medium"
     stt_model_path: str = ""
     stt_device: Literal["cpu", "cuda", "auto"] = "cpu"
@@ -133,6 +142,14 @@ class Settings(BaseSettings):
     stt_vad_enabled: bool = True
     stt_cpu_threads: Annotated[int, Field(ge=0, le=128)] = 4
     stt_allow_model_download: bool = False
+    # 정규화 단계에서 이 신뢰도 미만인 세그먼트를 버린다. 0 이면 끄기(기본).
+    #
+    # 무음 구간 환각("감사합니다", "자막제공자" 등)을 겨냥한다 — 실측에서 정상 발화는
+    # 0.82, 환각은 0.20 이었다. **발화를 지우는 동작이므로 기본은 꺼짐이고**, 임계값을
+    # 높게 잡으면 진짜 발화까지 사라진다. 0.3~0.4 를 권한다.
+    #
+    # RAW Transcript 는 그대로 남으므로 지워진 내용은 언제든 확인할 수 있다 (§50).
+    stt_min_segment_confidence: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0
 
     # --- 외부 전사 API (STT_ENGINE=groq-whisper) -----------------------------
     #
@@ -174,14 +191,27 @@ class Settings(BaseSettings):
     enable_transcript_download: bool = True
     enable_audio_download: bool = False
     enable_ffmpeg_preprocess: bool = False
+    # --- Transcript 후처리 (Harness §50 / §51) ---
+    #
+    # 원본을 **덮어쓰지 않는다.** RAW 와 NORMALIZED 는 그대로 두고 `LLM_CORRECTED` 라는
+    # 별도 종류로 한 벌 더 만든다. 그래서 보정이 잘못돼도 원본 전사가 온전하고, 두 결과를
+    # 나란히 비교할 수 있다 (§50 — 파생 결과는 원본을 대체하지 않는다).
+    #
+    #   enable_llm_correction : 문맥과 용어사전에 맞춰 문장을 다듬는다
+    #   enable_diarization    : 발화자를 상담원/고객으로 나눈다
+    #
+    # 둘은 **한 번의 LLM 호출**에서 함께 처리된다. 같은 문장을 두 번 읽히면 비용이 두 배가
+    # 되고, 보정된 문장과 화자 판단이 서로 다른 입력을 보게 된다.
+    #
+    # **화자분리는 음향 기반이 아니다.** 문맥으로 추정하므로 정확한 화자 식별이 아니며,
+    # 그 한계를 화면에도 표기한다 (§4.3).
     enable_llm_correction: bool = False
     enable_diarization: bool = False
 
     # --- LLM 후처리 분석 (Harness §2.1 / §8.2 / §13 / §54) ---
     #
-    # `enable_llm_correction` 과는 다른 기능이다. 교정은 Transcript 본문을 바꾸지만,
-    # 분석은 요약·분류·키워드만 만들고 원본은 건드리지 않는다. 그래서 교정은 여전히
-    # 범위 밖이고 분석만 구현되어 있다.
+    # 후처리(`enable_llm_correction`)와는 다른 기능이다. 후처리는 문장을 다듬은 사본을
+    # 만들고, 분석은 요약·분류·키워드만 만든다. 둘 다 원본은 건드리지 않는다.
     enable_llm_analysis: bool = False
 
     # --- 상담 품질 평가 (QA) ---
@@ -259,6 +289,54 @@ class Settings(BaseSettings):
     # 외부 LLM 전송 승인. 녹취 본문이 사내 경계를 벗어나므로, 켜기 전에 개인정보
     # 영향평가와 위탁 계약이 선행되어야 한다 (SEC-021 / §8.2).
     allow_external_llm: bool = False
+
+    # --- 녹취서버 수집 (수신 전문, docs/INTERFACE.md) ------------------------
+    #
+    #   off    : 수집하지 않는다 (기본)
+    #   folder : 공유 폴더에 떨어진 파일을 집어 온다. 폐쇄망에서 가장 흔하다
+    #   http   : 녹취서버 REST API 를 조회해 내려받는다
+    #
+    # 수집된 건은 업로드와 **같은 검증**을 지난다 — 확장자·시그니처·크기·재생시간.
+    # 입구가 늘어도 규칙이 갈라지면 약한 쪽이 우회로가 된다 (Harness §6).
+    recording_source: Literal["off", "folder", "http"] = "off"
+    # 수집한 Job 의 소유자가 될 계정. 없는 계정이면 수집 시점에 실패한다.
+    recording_ingest_username: str = ""
+    # 한 번의 수집에서 처리할 최대 건수. 한 번에 수천 건이 들어와 큐를 막는 것을 막는다.
+    recording_batch_limit: Annotated[int, Field(ge=1, le=500)] = 20
+
+    # folder 방식
+    recording_inbox_dir: Path = Path("./data/recordings/inbox")
+    # 처리한 파일을 옮길 곳. 지우지 않고 옮기는 이유는, 수집이 잘못되었을 때 원본이
+    # 남아 있어야 다시 넣을 수 있기 때문이다.
+    recording_processed_dir: Path = Path("./data/recordings/processed")
+    recording_failed_dir: Path = Path("./data/recordings/failed")
+
+    # http 방식
+    recording_api_base_url: str = ""
+    recording_api_key: SecretStr = SecretStr("")
+    recording_api_timeout_seconds: Annotated[int, Field(ge=5, le=600)] = 60
+    # 이미 운영 중인 녹취서버를 우리 규격에 맞춰 고치라고 할 수 없는 경우가 많다.
+    # 필드 이름만 여기서 맞춘다 (docs/INTERFACE.md 의 수신 전문 참고).
+    recording_field_id: str = "id"
+    recording_field_filename: str = "filename"
+    recording_field_download_url: str = "download_url"
+    recording_field_recorded_at: str = "recorded_at"
+    recording_list_items_key: str = "items"
+
+    # --- 결과 송신 (송신 전문, docs/INTERFACE.md) ----------------------------
+    #
+    # 전사·분석·QA 결과를 외부 솔루션(CRM 등)으로 보낸다. **녹취 본문이 사내 경계를
+    # 벗어날 수 있으므로** 주소가 외부면 ALLOW_EXTERNAL_OUTBOUND 승인이 필요하다.
+    outbound_enabled: bool = False
+    outbound_url: str = ""
+    outbound_api_key: SecretStr = SecretStr("")
+    outbound_timeout_seconds: Annotated[int, Field(ge=5, le=600)] = 30
+    outbound_max_attempts: Annotated[int, Field(ge=1, le=10)] = 3
+    # 무엇을 실어 보낼지. 필요 없는 것을 빼면 전송량과 노출 범위가 함께 줄어든다.
+    outbound_include_transcript: bool = True
+    outbound_include_analysis: bool = True
+    outbound_include_qa: bool = True
+    allow_external_outbound: bool = False
 
     ffmpeg_binary: str = "/usr/bin/ffmpeg"
     ffmpeg_timeout_seconds: Annotated[int, Field(ge=1, le=7200)] = 600
@@ -380,29 +458,31 @@ class Settings(BaseSettings):
                 "사내 SSO 연동은 app/auth/providers 의 어댑터 구현 후 활성화한다."
             )
 
-        if self.enable_llm_correction or self.enable_diarization:
-            # Harness §2.1: Transcript 본문을 고쳐 쓰는 교정과 화자분리는 아직 없다.
-            # 원본을 바꾸지 않는 분석(`enable_llm_analysis`)은 구현되어 있으며 별개다.
+        if (self.enable_llm_correction or self.enable_diarization) and not (
+            self.enable_llm_analysis
+        ):
+            # 후처리는 분석과 같은 LLM Provider 를 쓴다. 분석이 꺼진 채로 후처리만 켜면
+            # Provider 설정 검증(주소·키·외부 승인)을 건너뛴 채 외부 호출이 나간다.
             raise ConfigurationError(
-                "LLM 교정 / 화자분리는 본 버전 범위 밖이다. 해당 Feature Flag 를 끄고 기동한다. "
-                "요약·분류가 필요하면 ENABLE_LLM_ANALYSIS 를 쓴다."
+                "ENABLE_LLM_CORRECTION / ENABLE_DIARIZATION 은 "
+                "ENABLE_LLM_ANALYSIS=true 를 전제로 한다. 같은 LLM 설정을 쓴다"
             )
 
-        if self.stt_engine == "groq-whisper":
+        if self.stt_engine in ("groq-whisper", "external"):
             # 음성 원본이 사내를 벗어난다. 설정 실수로 그렇게 되는 일은 없어야 한다 (SEC-021).
             if not self.allow_external_stt:
                 raise ConfigurationError(
-                    "STT_ENGINE='groq-whisper' 는 음성 원본을 외부 API 로 전송한다. "
+                    f"STT_ENGINE='{self.stt_engine}' 는 음성 원본을 외부로 전송한다. "
                     "ALLOW_EXTERNAL_STT=true 로 명시 승인해야 한다 (Harness §8.2)"
                 )
             if not self.stt_api_key.get_secret_value().strip():
                 # 키 없이 떠 있다가 첫 전사에서 401 로 드러나는 것보다 낫다 (Harness §4.3).
                 raise ConfigurationError(
-                    "STT_ENGINE='groq-whisper' 이면 STT_API_KEY 를 지정해야 한다"
+                    f"STT_ENGINE='{self.stt_engine}' 이면 STT_API_KEY 를 지정해야 한다"
                 )
             if not self.stt_api_base_url.strip():
                 raise ConfigurationError(
-                    "STT_ENGINE='groq-whisper' 이면 STT_API_BASE_URL 을 지정해야 한다"
+                    f"STT_ENGINE='{self.stt_engine}' 이면 STT_API_BASE_URL 을 지정해야 한다"
                 )
             if self.stt_api_base_url.startswith("http://") and not _is_local_url(
                 self.stt_api_base_url
@@ -417,6 +497,35 @@ class Settings(BaseSettings):
             raise ConfigurationError(
                 "prod 환경에서 실시간 STT 와 STT_ENGINE='mock' 을 함께 쓸 수 없다"
             )
+
+        if self.recording_source == "http" and not self.recording_api_base_url.strip():
+            raise ConfigurationError(
+                "RECORDING_SOURCE='http' 이면 RECORDING_API_BASE_URL 을 지정해야 한다"
+            )
+
+        if self.recording_source != "off" and not self.recording_ingest_username.strip():
+            # 소유자 없는 Job 은 만들 수 없다. 수집 시점에 알기보다 기동 시점에 막는다.
+            raise ConfigurationError(
+                "RECORDING_SOURCE 를 쓰려면 RECORDING_INGEST_USERNAME 을 지정해야 한다"
+            )
+
+        if self.outbound_enabled:
+            if not self.outbound_url.strip():
+                raise ConfigurationError(
+                    "OUTBOUND_ENABLED=true 이면 OUTBOUND_URL 을 지정해야 한다"
+                )
+            if not self.allow_external_outbound and not _is_local_url(self.outbound_url):
+                # 전사·분석 결과가 사내를 벗어난다. 명시 승인 없이는 막는다 (SEC-021).
+                raise ConfigurationError(
+                    f"OUTBOUND_URL 이 외부 주소({self.outbound_url})다. 전사 결과를 "
+                    "외부로 보내려면 ALLOW_EXTERNAL_OUTBOUND=true 로 승인해야 한다"
+                )
+            if self.outbound_url.startswith("http://") and not _is_local_url(
+                self.outbound_url
+            ):
+                raise ConfigurationError(
+                    "외부 OUTBOUND_URL 은 https 여야 한다. 평문으로는 결과를 보내지 않는다"
+                )
 
         if self.enable_qa and not self.enable_llm_analysis:
             # QA 는 분석과 같은 LLM Provider 를 쓴다. 분석이 꺼진 채로 QA 만 켜면

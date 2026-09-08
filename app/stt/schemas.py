@@ -34,6 +34,9 @@ class TranscriptSegment:
     end: float
     text: str
     confidence: float | None = None
+    # 발화자. **음향 기반 화자분리가 아니다** — 문맥으로 추정한 값이며, 후처리를
+    # 거치지 않은 Transcript 에서는 `None` 이다 (Harness §4.3).
+    speaker: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
