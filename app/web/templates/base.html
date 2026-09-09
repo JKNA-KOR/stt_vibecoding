@@ -102,6 +102,21 @@
         <p>{% block page_subtitle %}{% endblock %}</p>
       </div>
       <div class="topbar-tools">{% block topbar_tools %}{% endblock %}</div>
+
+      {# 지금 누구로 접속해 있는지 상단에서 바로 보이게 한다. 사이드바 하단에도 있지만
+         좁은 화면에서는 사이드바가 접혀 보이지 않는다. #}
+      <div class="topbar-user">
+        <span class="avatar avatar-sm">{{ username[0] }}</span>
+        <span class="topbar-user-body">
+          {# Jinja2 autoescape 가 켜져 있다. 사용자명은 신뢰할 수 없는 값으로 다룬다. #}
+          <span class="topbar-username">{{ username }}</span>
+          <span class="topbar-role">{{ role }}</span>
+        </span>
+        <button type="button" id="logout-top" class="icon-button icon-button-inline"
+                aria-label="로그아웃" title="로그아웃">
+          {{ ui.icon("logout") }}
+        </button>
+      </div>
     </header>
 
     <main class="content">
@@ -113,6 +128,34 @@
 </div>
 {% else %}
 {% block anonymous %}{% endblock %}
+{% endif %}
+
+{# 삭제를 하는 화면만 팝업을 포함한다. 화면 최상단에서 `needs_delete_modal` 을 set 한다.
+   열 수 없는 팝업을 모든 화면에 렌더할 이유가 없고, 그러면 "이 화면에 삭제가 있나" 를
+   마크업만 보고 판단할 수 없게 된다. #}
+{% if can_admin and needs_delete_modal %}
+{# ---- 삭제 확인 팝업 (여러 화면이 함께 쓴다) ------------------------------
+   되돌릴 수 없는 동작이므로 무엇이 사라지는지 목록으로 보여준 뒤 확인을 받는다 (§48).
+   화면마다 따로 만들면 한쪽만 고쳐져 경고 문구가 갈라진다. #}
+<div class="modal" id="delete-modal" hidden>
+  <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+    <div class="modal-head">
+      <h2 class="panel-title" id="delete-modal-title">{{ ui.icon("alert") }} 녹취 삭제 확인</h2>
+    </div>
+    <div class="modal-body">
+      <p class="hint" id="delete-modal-count"></p>
+      <ul class="delete-targets" id="delete-modal-list"></ul>
+      <p class="hint delete-warning">
+        음성 원본, 변환 결과, AI 분석, QA 평가가 함께 삭제되며 <strong>되돌릴 수 없습니다.</strong>
+        삭제 내역은 감사 로그에 기록됩니다.
+      </p>
+    </div>
+    <div class="modal-foot">
+      <button type="button" id="delete-modal-cancel">취소</button>
+      <button type="button" class="danger" id="delete-modal-confirm">확인 (삭제)</button>
+    </div>
+  </div>
+</div>
 {% endif %}
 
   <script src="/static/app.js"></script>

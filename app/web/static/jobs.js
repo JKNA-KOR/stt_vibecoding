@@ -104,6 +104,8 @@ function renderJobs(payload) {
     row.appendChild(qaScoreCell(job));
     row.appendChild(violationCell(job));
 
+    // 이 화면은 진행 상황을 보는 곳이다. 삭제는 상담 목록 화면에 모아 둔다 —
+    // 되돌릴 수 없는 동작이 여러 화면에 흩어져 있으면 실수하기 쉽다.
     const actionCell = el("td");
     if (job.status === "QUEUED" || job.status === "PROCESSING") {
       const cancel = el("button", null, "취소");

@@ -15,19 +15,27 @@ faster-whisper 기반이며, STT Core 는 교체 가능한 인터페이스 뒤�
 
 ```bash
 cp .env.example .env
-# SESSION_SECRET, POSTGRES_PASSWORD, STT_APP_DB_PASSWORD, BOOTSTRAP_ADMIN_* 를 채운다
+# SESSION_SECRET, POSTGRES_PASSWORD, STT_APP_DB_PASSWORD 를 채운다
 
-docker compose up -d db redis
-docker compose run --rm migrate
-docker compose exec -T db psql -v ON_ERROR_STOP=1 \
-  -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v app_user="$STT_APP_DB_USER" \
-  -f /opt/grant_least_privilege.sql
-docker compose up -d api worker
-docker compose exec api python -m scripts.bootstrap_admin
+docker compose up -d --build
+
+# 초기 관리자 (한 번만)
+BOOTSTRAP_ADMIN_USERNAME=admin BOOTSTRAP_ADMIN_PASSWORD='...' \
+  docker compose --profile bootstrap run --rm bootstrap
 ```
 
-`http://127.0.0.1:8000` 에서 로그인한다. 자세한 절차와 주의사항은
-[`docs/OPERATIONS.md`](docs/OPERATIONS.md) 를 본다.
+`http://127.0.0.1:8080` 에서 로그인한다 (`API_PORT` 로 바꿀 수 있다).
+
+기동 순서는 compose 가 강제한다 — `db` → `migrate` → `grant` → `api`/`worker`.
+스키마 마이그레이션과 런타임 계정 권한 부여가 자동으로 앞에 온다. 자세한 절차와
+주의사항은 [`docs/OPERATIONS.md`](docs/OPERATIONS.md) 를 본다.
+
+| 명령 | 하는 일 |
+|---|---|
+| `docker compose up -d --build` | 코드를 고친 뒤 다시 띄운다 |
+| `docker compose logs -f worker` | 전사·분석 진행 상황 |
+| `docker compose down` | 정지 (데이터 유지) |
+| `docker compose down -v` | 정지 + **데이터 삭제** |
 
 **모델 없이 전 경로를 써 보려면** `.env` 에 `STT_ENGINE=mock` 을 둔다. 실제 음성을
 전사하지는 않지만 업로드부터 다운로드까지 동작한다. 운영 환경에서 선택하면 기동이 거부된다.

@@ -1054,3 +1054,43 @@ h3.panel-title:first-child { margin-top: 0; }
 .speaker-unknown { color: var(--muted); }
 
 .segment-body { white-space: pre-wrap; word-break: break-word; }
+
+/* 목록 행의 동작 버튼. 두 개 이상일 때 붙지 않게 한다. */
+.row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+/* --- 상단바 로그인 정보 -------------------------------------------------
+   사이드바 하단에도 같은 정보가 있지만, 좁은 화면에서는 사이드바가 접혀 보이지
+   않는다. 지금 누구로 접속해 있는지는 어느 화면에서든 보여야 한다. */
+
+.topbar-user {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-left: 14px;
+  margin-left: 2px;
+  border-left: 1px solid var(--border);
+}
+
+.avatar-sm { width: 32px; height: 32px; border-radius: 10px; font-size: 13px; }
+
+.topbar-user-body { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.topbar-username {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topbar-role { color: var(--muted); font-size: 11px; }
+
+/* 상단바 안의 아이콘 버튼은 좁은 화면에서도 보여야 한다 (.icon-button 은 기본 숨김). */
+.icon-button-inline { display: flex; width: 32px; height: 32px; }
+.icon-button-inline:hover { border-color: var(--danger); color: var(--danger); }
+
+@media (max-width: 860px) {
+  /* 좁은 화면에서는 이름을 접고 아바타만 남긴다. 상단바가 두 줄로 깨지지 않게 한다. */
+  .topbar-user-body { display: none; }
+  .topbar-user { padding-left: 10px; }
+}

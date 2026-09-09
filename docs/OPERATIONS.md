@@ -51,19 +51,56 @@ cp .env.example .env
 ### 2.2 기동 순서
 
 ```bash
-docker compose up -d db redis          # 첫 기동 시 런타임 DB 계정이 생성된다
-docker compose run --rm migrate        # 스키마 소유자 계정으로 마이그레이션
-docker compose exec -T db \
-  psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-       -v app_user="$STT_APP_DB_USER" -f /opt/grant_least_privilege.sql
-docker compose up -d api worker
-docker compose exec api python -m scripts.bootstrap_admin
+cp .env.example .env       # 필수 값을 채운다 (아래 표 참고)
+docker compose up -d --build
 ```
 
-**권한 부여는 마이그레이션 뒤에 온다.** DB 초기화 훅이 도는 시점에는 아직 테이블이
-없어 테이블 단위 권한을 줄 수 없다.
+**이 한 줄이 전부다.** compose 가 순서를 강제한다.
 
-초기 관리자를 만든 뒤 `.env` 의 `BOOTSTRAP_ADMIN_*` 를 비우고 `api` 를 재시작한다.
+```
+db (healthy) → migrate (완료) → grant (완료) → api / worker
+                                      ↑
+                              redis (healthy)
+```
+
+`--build` 를 붙이는 이유는, 코드를 고친 뒤 `up -d` 만 하면 **예전 이미지가 그대로
+뜨기 때문이다.** 설정 검증이 바뀐 줄 모르고 옛 이미지로 기동하다 실패하는 일이 실제로
+있었다. 이미지가 최신이라면 `--build` 는 캐시를 타서 몇 초면 끝난다.
+
+**권한 부여(`grant`)는 마이그레이션 뒤에 온다.** DB 초기화 훅이 도는 시점에는 아직
+테이블이 없어 테이블 단위 권한을 줄 수 없다. 이 단계를 사람이 기억해야 했을 때 실제로
+사고가 났다 — QA 와 용어사전 테이블이 권한 없이 배포되어 런타임에
+`InsufficientPrivilege` 로 실패했다. 지금은 `up` 마다 자동으로 다시 돈다 (GRANT 는
+멱등이다).
+
+### 2.2.1 초기 관리자 계정
+
+계정이 없으면 로그인할 수 없다. 한 번만 실행한다.
+
+```bash
+BOOTSTRAP_ADMIN_USERNAME=admin BOOTSTRAP_ADMIN_PASSWORD='...' \
+    docker compose --profile bootstrap run --rm bootstrap
+```
+
+기본 기동에 넣지 않은 이유는, 자격증명이 없으면 스크립트가 종료코드 2 로 끝나
+`up` 전체가 실패한 것처럼 보이기 때문이다. 같은 사용자명이 이미 있으면 아무것도 하지
+않으므로 다시 실행해도 안전하다 (비밀번호를 덮어쓰지 않는다 — 재실행이 조용한 계정
+탈취 경로가 되어서는 안 된다).
+
+계정을 만든 뒤 `.env` 의 `BOOTSTRAP_ADMIN_*` 를 비운다. prod 환경에 값이 남아 있으면
+설정 검증이 기동을 거부한다 (Harness §9).
+
+### 2.2.2 자주 쓰는 명령
+
+```bash
+docker compose up -d --build          # 코드를 고친 뒤
+docker compose logs -f worker         # 전사·분석 진행 상황
+docker compose ps                     # 상태 확인
+docker compose down                   # 정지 (데이터는 남는다)
+docker compose down -v                # 정지 + 데이터 삭제 (되돌릴 수 없다)
+```
+
+`down -v` 는 DB 와 저장된 음성·전사를 **전부 지운다.** 처음부터 다시 시작할 때만 쓴다.
 
 ### 2.3 확인
 

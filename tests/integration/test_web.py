@@ -386,3 +386,51 @@ def test_worklet_is_served_as_javascript(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert "registerProcessor" in response.text
+
+
+def test_topbar_shows_who_is_signed_in(client: TestClient) -> None:
+    """사이드바가 접히는 좁은 화면에서도 접속 주체가 보여야 한다."""
+    _login(client, "root")
+    body = client.get("/").text
+
+    assert 'class="topbar-user"' in body
+    assert 'id="logout-top"' in body
+    # 사용자명과 역할이 함께 나온다.
+    assert "root" in body
+    assert "ADMIN" in body
+
+
+def test_dashboard_has_no_delete_action(client: TestClient) -> None:
+    """되돌릴 수 없는 동작이 여러 화면에 흩어져 있으면 실수하기 쉽다.
+
+    대시보드는 진행 상황을 보는 곳이고, 삭제는 상담 목록 화면에만 둔다.
+    """
+    _login(client, "root")
+    body = client.get("/").text
+
+    # 삭제를 시작하는 버튼도, 확인 팝업도 이 화면에는 없다.
+    assert 'id="consult-delete-mode"' not in body
+    assert 'id="consult-delete"' not in body
+    assert 'id="delete-modal"' not in body
+
+
+def test_delete_modal_is_rendered_only_where_deletion_happens(
+    client: TestClient,
+) -> None:
+    """열 수 없는 팝업을 모든 화면에 렌더할 이유가 없다."""
+    _login(client, "root")
+
+    assert 'id="delete-modal"' in client.get("/consultations").text
+    assert 'id="delete-modal"' not in client.get("/qa").text
+
+
+def test_consultations_can_filter_by_status(client: TestClient) -> None:
+    """취소·실패한 상담도 여기서 정리한다. 기본은 완료된 상담이다."""
+    _login(client, "root")
+    body = client.get("/consultations").text
+
+    assert 'id="consult-status"' in body
+    assert 'value="CANCELLED"' in body
+    assert 'value="FAILED"' in body
+    # 기본 선택은 완료다 — 이 화면의 목적은 스크립트를 읽는 것이다.
+    assert body.index('value="COMPLETED"') < body.index('value="CANCELLED"')

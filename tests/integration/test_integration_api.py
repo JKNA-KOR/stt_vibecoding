@@ -475,3 +475,52 @@ def test_audit_log_shows_deletions_to_the_auditor(client: TestClient, tmp_path: 
 
     assert body["items"]
     assert body["items"][0]["action"] == "delete_job"
+
+
+def test_cancelled_jobs_can_be_deleted(client: TestClient, tmp_path: Path) -> None:
+    """취소된 작업도 목록에 계속 쌓인다. 정리 경로가 있어야 한다.
+
+    처리 중인 것만 막으면 된다 — 워커가 사라진 행을 붙들기 때문이다. 끝난 작업은
+    이유를 가리지 않고 지울 수 있어야 한다.
+    """
+    csrf = _login(client, "agent")
+    audio = tmp_path / "call.wav"
+    _write_wav(audio)
+    with audio.open("rb") as handle:
+        job_id = client.post(
+            f"{API_PREFIX}/jobs",
+            files={"file": ("call.wav", handle, "audio/wav")},
+            headers={CSRF_HEADER_NAME: csrf},
+        ).json()["job"]["id"]
+
+    # Inline 큐라 업로드 시점에 이미 완료되어 있다. 취소된 상태를 직접 만든다.
+    with session_scope() as session:
+        session.get(Job, job_id).status = "CANCELLED"
+
+    response = client.delete(f"{API_PREFIX}/jobs/{job_id}", headers={CSRF_HEADER_NAME: csrf})
+
+    assert response.status_code == 204
+    with session_scope() as session:
+        assert session.get(Job, job_id) is None
+
+
+def test_jobs_in_flight_are_refused(client: TestClient, tmp_path: Path) -> None:
+    """처리 중인 작업을 지우면 워커가 사라진 행을 붙들고 실패한다."""
+    csrf = _login(client, "agent")
+    audio = tmp_path / "call.wav"
+    _write_wav(audio)
+    with audio.open("rb") as handle:
+        job_id = client.post(
+            f"{API_PREFIX}/jobs",
+            files={"file": ("call.wav", handle, "audio/wav")},
+            headers={CSRF_HEADER_NAME: csrf},
+        ).json()["job"]["id"]
+
+    with session_scope() as session:
+        session.get(Job, job_id).status = "PROCESSING"
+
+    response = client.delete(f"{API_PREFIX}/jobs/{job_id}", headers={CSRF_HEADER_NAME: csrf})
+
+    assert response.status_code == 409
+    with session_scope() as session:
+        assert session.get(Job, job_id) is not None

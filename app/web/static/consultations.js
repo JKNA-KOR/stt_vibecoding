@@ -13,6 +13,8 @@ const consult = {
   offset: 0,
   total: 0,
   search: "",
+  // 기본은 완료된 상담이다. 이 화면의 목적은 스크립트를 읽는 것이다.
+  status: "COMPLETED",
   jobId: null,
   canDownload: false,
   canAdmin: false,
@@ -95,9 +97,9 @@ async function loadConsultations() {
   const params = new URLSearchParams({
     limit: String(CONSULT_PAGE_SIZE),
     offset: String(consult.offset),
-    // 스크립트가 있는 상담만 본다. 처리 중인 작업은 작업 목록 화면의 몫이다.
-    status: "COMPLETED",
   });
+  // 상태를 비우면 전체다. 취소·실패한 상담을 정리할 때 쓴다.
+  if (consult.status) params.set("status", consult.status);
   try {
     renderConsultations(await request("/jobs?" + params.toString()));
   } catch (error) {
@@ -236,6 +238,16 @@ async function selectConsultation(jobId) {
     document.getElementById("script-meta").textContent =
       `${formatTimestamp(cached.created_at)} · ${formatDuration(cached.audio_duration_seconds)}`;
   }
+
+  // 완료되지 않은 상담에는 스크립트가 없다. 404 를 오류로 띄우는 대신 미리 알린다.
+  if (cached && cached.status !== "COMPLETED") {
+    document.getElementById("script-segments").replaceChildren();
+    const placeholder = document.getElementById("script-placeholder");
+    placeholder.hidden = false;
+    placeholder.textContent = `${cached.status} 상태라 변환 결과가 없습니다.`;
+    document.getElementById("script-download").hidden = true;
+    return;
+  }
   await loadScript();
 }
 
@@ -326,72 +338,36 @@ function setDeleteMode(on) {
   decorateSelection();
 }
 
-/** 삭제 대상을 팝업에 나열한다. 이름을 보여주지 않으면 무엇을 지우는지 알 수 없다. */
+/** 선택한 상담을 팝업으로 확인받고 지운다. 팝업은 base.html 의 공용 것을 쓴다. */
 function openDeleteModal() {
   const ids = Array.from(consultSelection);
   if (ids.length === 0) return;
 
-  const list = document.getElementById("delete-modal-list");
-  list.replaceChildren();
-  for (const id of ids) {
+  const targets = ids.map((id) => {
     const job = consult.items.find((item) => item.id === id);
-    const row = el("li");
-    row.appendChild(el("span", "delete-target-name", job ? job.original_filename : id));
-    if (job) {
-      row.appendChild(el("span", "delete-target-meta", formatTimestamp(job.created_at)));
+    return {
+      id,
+      name: job ? job.original_filename : id,
+      meta: job ? formatTimestamp(job.created_at) : "",
+    };
+  });
+
+  askDeleteConfirmation(targets, async () => {
+    try {
+      const result = await deleteJobs(ids);
+      for (const id of result.deleted) consultSelection.delete(id);
+
+      // 지운 상담을 보고 있었다면 오른쪽 프레임을 비운다.
+      if (consult.jobId && result.deleted.includes(consult.jobId)) {
+        consult.jobId = null;
+        resetDetailPane();
+      }
+      setDeleteMode(false);
+      await loadConsultations();
+    } catch (error) {
+      notifyError(error);
     }
-    list.appendChild(row);
-  }
-
-  document.getElementById("delete-modal-count").textContent =
-    `선택한 상담 ${ids.length}건을 삭제합니다.`;
-  document.getElementById("delete-modal").hidden = false;
-  document.getElementById("delete-modal-cancel").focus();
-}
-
-function closeDeleteModal() {
-  document.getElementById("delete-modal").hidden = true;
-}
-
-async function confirmDelete() {
-  const ids = Array.from(consultSelection);
-  if (ids.length === 0) return;
-
-  const confirmButton = document.getElementById("delete-modal-confirm");
-  confirmButton.disabled = true;
-  try {
-    const result = await request("/jobs/bulk-delete", {
-      method: "POST",
-      json: { job_ids: ids },
-    });
-
-    for (const id of result.deleted) consultSelection.delete(id);
-
-    if (result.failed.length === 0) {
-      notify(`${result.deleted.length}건을 삭제했습니다. 감사 로그에 기록되었습니다.`, "success");
-    } else {
-      // 실패 이유를 그대로 보여준다. 숨기면 사용자가 다음 행동을 정할 수 없다 (§4.3).
-      notify(
-        `${result.deleted.length}건 삭제, ${result.failed.length}건 실패: ` +
-          result.failed[0].message,
-        "error",
-      );
-    }
-
-    // 지운 상담을 보고 있었다면 오른쪽 프레임을 비운다.
-    if (consult.jobId && result.deleted.includes(consult.jobId)) {
-      consult.jobId = null;
-      resetDetailPane();
-    }
-
-    closeDeleteModal();
-    setDeleteMode(false);
-    await loadConsultations();
-  } catch (error) {
-    notifyError(error);
-  } finally {
-    confirmButton.disabled = false;
-  }
+  });
 }
 
 function resetDetailPane() {
@@ -428,6 +404,17 @@ document.addEventListener("DOMContentLoaded", () => {
     renderConsultations({ items: consult.items, page: { total: consult.total } });
   });
 
+  const status = document.getElementById("consult-status");
+  status.addEventListener("change", () => {
+    consult.status = status.value;
+    consult.offset = 0;
+    // 목록이 바뀌면 선택도 무효다. 보이지 않는 것을 지우게 두지 않는다 (§48).
+    consultSelection.clear();
+    consult.jobId = null;
+    resetDetailPane();
+    loadConsultations();
+  });
+
   document.getElementById("consult-prev").addEventListener("click", () => {
     consult.offset = Math.max(0, consult.offset - CONSULT_PAGE_SIZE);
     loadConsultations();
@@ -457,16 +444,6 @@ document.addEventListener("DOMContentLoaded", () => {
       decorateSelection();
     });
 
-    document.getElementById("delete-modal-cancel").addEventListener("click", closeDeleteModal);
-    document.getElementById("delete-modal-confirm").addEventListener("click", confirmDelete);
-
-    // 배경을 눌러도 닫힌다. 다만 확인 버튼은 배경 클릭으로 눌리지 않는다.
-    document.getElementById("delete-modal").addEventListener("click", (event) => {
-      if (event.target.id === "delete-modal") closeDeleteModal();
-    });
-    document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") closeDeleteModal();
-    });
   }
 
   loadConsultations();

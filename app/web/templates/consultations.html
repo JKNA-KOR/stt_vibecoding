@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% import "_icons.html" as ui %}
 {% set page_icon = "list" %}
+{# 이 화면에서 상담을 지운다. base.html 이 확인 팝업을 함께 렌더한다. #}
+{% set needs_delete_modal = true %}
 {% block title %}상담 목록 · STT 서비스{% endblock %}
 {% block page_title %}상담 목록{% endblock %}
 {% block page_subtitle %}상담 상세 정보와 변환된 스크립트를 한 화면에서 본다{% endblock %}
@@ -31,6 +33,18 @@
     <div class="panel-body">
       <label for="consult-search" class="sr-only">파일명 검색</label>
       <input type="text" id="consult-search" placeholder="파일명으로 찾기" maxlength="120">
+
+      {# 기본은 완료된 상담이다. 이 화면의 목적은 스크립트를 읽는 것이므로.
+         취소·실패한 것을 정리하려면 상태를 바꿔 고른다. #}
+      <div class="controls select-bar">
+        <label for="consult-status" class="sr-only">상태</label>
+        <select id="consult-status">
+          <option value="COMPLETED">완료된 상담</option>
+          <option value="CANCELLED">취소됨</option>
+          <option value="FAILED">실패</option>
+          <option value="">전체 상태</option>
+        </select>
+      </div>
 
       {% if can_admin %}
       <div class="controls select-bar" id="consult-select-bar" hidden>
@@ -101,29 +115,6 @@
   </div>
 </div>
 
-{% if can_admin %}
-{# ---- 삭제 확인 팝업 -----------------------------------------------------
-   되돌릴 수 없는 동작이므로 무엇이 사라지는지 목록으로 보여준 뒤 확인을 받는다 (§48). #}
-<div class="modal" id="delete-modal" hidden>
-  <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
-    <div class="modal-head">
-      <h2 class="panel-title" id="delete-modal-title">{{ ui.icon("alert") }} 녹취 삭제 확인</h2>
-    </div>
-    <div class="modal-body">
-      <p class="hint" id="delete-modal-count"></p>
-      <ul class="delete-targets" id="delete-modal-list"></ul>
-      <p class="hint delete-warning">
-        음성 원본, 변환 결과, AI 분석, QA 평가가 함께 삭제되며 <strong>되돌릴 수 없습니다.</strong>
-        삭제 내역은 감사 로그에 기록됩니다.
-      </p>
-    </div>
-    <div class="modal-foot">
-      <button type="button" id="delete-modal-cancel">취소</button>
-      <button type="button" class="danger" id="delete-modal-confirm">확인 (삭제)</button>
-    </div>
-  </div>
-</div>
-{% endif %}
 {% endblock %}
 
 {% block scripts %}

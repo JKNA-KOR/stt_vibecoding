@@ -172,6 +172,59 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # 런타임 계정에 테이블 권한을 준다 (SEC-026).
+  #
+  # **마이그레이션 뒤에 와야 한다.** DB 초기화 훅이 도는 시점에는 아직 테이블이 없어
+  # 테이블 단위 권한을 줄 수 없다. 그래서 별도 단계로 두고 순서를 compose 가 강제한다.
+  #
+  # 매번 다시 돌린다. GRANT 는 멱등이며, **새 테이블을 만드는 마이그레이션마다 사람이
+  # 이 단계를 기억해야 하는 구조가 실제로 사고를 냈다** — QA 와 용어사전 테이블이
+  # 권한 없이 배포되어 런타임에 InsufficientPrivilege 로 실패했다.
+  #
+  # 애플리케이션 이미지에는 psql 이 없으므로 postgres 이미지를 그대로 쓴다.
+  grant:
+    image: postgres:18-alpine
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?필요}
+    volumes:
+      - ./scripts/grant_least_privilege.sql:/opt/grant_least_privilege.sql:ro
+    command:
+      - psql
+      - -v
+      - ON_ERROR_STOP=1
+      - -h
+      - db
+      - -U
+      - ${POSTGRES_USER:-stt_owner}
+      - -d
+      - ${POSTGRES_DB:-stt}
+      - -v
+      - app_user=${STT_APP_DB_USER:-stt_app}
+      - -f
+      - /opt/grant_least_privilege.sql
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # 초기 ADMIN 계정. 자격증명이 있을 때만 돌린다 (profile).
+  #
+  #   BOOTSTRAP_ADMIN_USERNAME=admin BOOTSTRAP_ADMIN_PASSWORD='...' \
+  #       docker compose --profile bootstrap up bootstrap
+  #
+  # 기본 기동에 넣지 않은 이유는, 자격증명이 없으면 종료코드 2 로 끝나 `up` 전체가
+  # 실패한 것처럼 보이기 때문이다. 계정을 만든 뒤에는 .env 에서 값을 비운다 (§9).
+  bootstrap:
+    build: .
+    profiles: ["bootstrap"]
+    environment:
+      <<: *app-env
+    command: ["python", "-m", "scripts.bootstrap_admin"]
+    depends_on:
+      grant:
+        condition: service_completed_successfully
+    restart: "no"
+
   api:
     build: .
     environment:
@@ -183,8 +236,9 @@ services:
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
-      db:
-        condition: service_healthy
+      # 스키마와 권한이 갖춰진 뒤에 뜬다. 순서를 사람이 기억하지 않아도 되게 한다.
+      grant:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -218,8 +272,9 @@ services:
       # 동시 실행 수는 설정에서 오지만, Celery CLI 에도 명시해 둔다.
       - --concurrency=${STT_MAX_CONCURRENT_JOBS:-2}
     depends_on:
-      db:
-        condition: service_healthy
+      # api 와 같은 이유로 스키마·권한이 갖춰진 뒤에 뜬다.
+      grant:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     restart: unless-stopped

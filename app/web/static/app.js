@@ -153,6 +153,69 @@ function setProgress(bar, ratio) {
   bar.className = "progress-bar p" + step;
 }
 
+/* --- 삭제 확인 팝업 (공용) --------------------------------------------------
+ *
+ * 되돌릴 수 없는 동작이므로 **무엇이 사라지는지 이름으로 보여준 뒤** 확인을 받는다
+ * (Harness §48). 화면마다 따로 만들면 한쪽만 고쳐져 경고 문구가 갈라지므로 여기 하나만
+ * 둔다. 팝업 자체는 관리자에게만 렌더되므로 없으면 조용히 아무 일도 하지 않는다.
+ */
+
+const deleteModal = { onConfirm: null };
+
+/**
+ * 삭제 확인을 받는다.
+ *
+ * @param {Array<{id: string, name: string, meta?: string}>} targets 지울 대상
+ * @param {Function} onConfirm 확인을 누르면 호출된다. 실패는 호출부가 알린다.
+ */
+function askDeleteConfirmation(targets, onConfirm) {
+  const modal = document.getElementById("delete-modal");
+  if (!modal || targets.length === 0) return;
+
+  const list = document.getElementById("delete-modal-list");
+  list.replaceChildren();
+  for (const target of targets) {
+    const row = el("li");
+    // 이름은 사용자가 올린 파일명이다. textContent 로만 넣는다 (Harness §13).
+    row.appendChild(el("span", "delete-target-name", target.name));
+    if (target.meta) row.appendChild(el("span", "delete-target-meta", target.meta));
+    list.appendChild(row);
+  }
+
+  document.getElementById("delete-modal-count").textContent =
+    `선택한 상담 ${targets.length}건을 삭제합니다.`;
+  deleteModal.onConfirm = onConfirm;
+  modal.hidden = false;
+  document.getElementById("delete-modal-cancel").focus();
+}
+
+function closeDeleteModal() {
+  const modal = document.getElementById("delete-modal");
+  if (!modal) return;
+  modal.hidden = true;
+  deleteModal.onConfirm = null;
+}
+
+/** 여러 상담을 지운다. 부분 실패를 그대로 알린다 (Harness §4.3). */
+async function deleteJobs(jobIds) {
+  const result = await request("/jobs/bulk-delete", {
+    method: "POST",
+    json: { job_ids: jobIds },
+  });
+
+  if (result.failed.length === 0) {
+    notify(`${result.deleted.length}건을 삭제했습니다. 감사 로그에 기록되었습니다.`, "success");
+  } else {
+    // 실패 이유를 그대로 보여준다. 숨기면 사용자가 다음 행동을 정할 수 없다.
+    notify(
+      `${result.deleted.length}건 삭제, ${result.failed.length}건 실패: ` +
+        result.failed[0].message,
+      "error",
+    );
+  }
+  return result;
+}
+
 /** 화자 라벨의 표시 색. 서버가 주는 값은 "상담원" / "고객" 둘뿐이다. */
 function speakerClass(label) {
   if (label === "상담원") return "agent";
@@ -238,8 +301,35 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  const logout = document.getElementById("logout-button");
-  if (logout) {
+  const modal = document.getElementById("delete-modal");
+  if (modal) {
+    document.getElementById("delete-modal-cancel").addEventListener("click", closeDeleteModal);
+    document.getElementById("delete-modal-confirm").addEventListener("click", async () => {
+      const button = document.getElementById("delete-modal-confirm");
+      const handler = deleteModal.onConfirm;
+      if (!handler) return;
+
+      button.disabled = true;
+      try {
+        await handler();
+      } finally {
+        button.disabled = false;
+        closeDeleteModal();
+      }
+    });
+    // 배경을 눌러도 닫힌다. 확인 버튼은 배경 클릭으로 눌리지 않는다.
+    modal.addEventListener("click", (event) => {
+      if (event.target.id === "delete-modal") closeDeleteModal();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeDeleteModal();
+    });
+  }
+
+  // 로그아웃 버튼이 두 곳(사이드바 하단, 상단바)에 있다. 같은 동작을 붙인다.
+  for (const id of ["logout-button", "logout-top"]) {
+    const logout = document.getElementById(id);
+    if (!logout) continue;
     logout.addEventListener("click", async () => {
       try {
         await request("/auth/logout", { method: "POST" });
